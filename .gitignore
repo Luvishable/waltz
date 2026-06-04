@@ -10,3 +10,4 @@ wheels/
 .venv
 docs/
 .idea/
+.env
