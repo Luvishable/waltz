@@ -9,10 +9,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: fake_cloud_db
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/18/docker
 
 volumes:
   pgdata:
-    driver: local
+    driver: local 
