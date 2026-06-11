@@ -25,6 +25,14 @@ class Reader:
         self._offset += struct.calcsize(fmt)
         return value
 
+    def read_bytes(self, n: int) -> bytes:
+        # pull n raw bytes from the cursor and advance past them.
+        # Used for TupleData text value: a length-prefixed run of bytes
+        # whose length we already read seperately.
+        chunk = self._data[self._offset : self._offset + n]
+        self._offset += n
+        return chunk
+
     def uint8(self) -> int:
         return self._read(">B")     # B = unsigned char,    1B (column flags)
 

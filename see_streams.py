@@ -6,6 +6,8 @@ import psycopg
 from dotenv import load_dotenv
 from psycopg import pq
 
+from waltz.decoder import Decoder
+
 load_dotenv()
 
 PASSWORD = os.getenv("POSTGRES_PASSWORD")
@@ -42,49 +44,18 @@ def format_pgtime(micros: int) -> str:
     return (PG_EPOCH + timedelta(microseconds=micros)).isoformat()
 
 
-def handle_payload(payload: bytes) -> None:
-    # the XLogData payload is exactly one pgoutput message.
-    # Like the outer COPY frame, its first byte is a type tag.
-    # payload[0] is an int; chr() turns it into its character ('B' , 'C' , ... )
+def handle_payload(payload: bytes, decoder: Decoder) -> None:
+    # Feed the raw pgoutput message to the decoder. Structural messages
+    # (Begin/Commit/Relation) return None; row changes return a ChangeEvent.
     tag = chr(payload[0])
-    if tag == "B":
-        decode_begin(payload)
-    elif tag == "C":
-        decode_commit(payload)
+    event = decoder.feed(payload)
+    if event is not None:
+        print(f"    [{tag}] {event}")
     else:
-        # R / I / U / D / Y / O / T -> coming in the next steps. Show tag + hex for now.
-        print(f"    [{tag}] (not parsed yet)    {len(payload)}B    {payload.hex()}")
+        print(f"    [{tag}] (structural, cached {len(decoder.relations)} relation(s))")
 
 
-def decode_begin(payload: bytes) -> None:
-    # Begin message (pgoutput proto v1), after the 1-byte 'B' tag:
-    #   [1:9]   Int64 final LSN         - this transaction's commit LSN
-    #   [9:17]   Int64  commit time     - microseconds since 2000-01-01
-    #   [17:21]  Int32  xid             - transaction id
-    # ">QqI": Q=final LSN (8B unsigned), q=commit time (8B signed), I=xid (4B unsigned).
-    # payload[1:21] is exactly 20 bytes = 8 + 8 + 4.
-    final_lsn, commit_time, xid = struct.unpack(">QqI", payload[1:21])
-
-    print(
-        f"    [B] Begin   xid={xid}  finalLSN={format_lsn(final_lsn)}  "
-        f"committedAt={format_pgtime(commit_time)}"
-    )
-
-def decode_commit(payload: bytes) -> None:
-    # Commit message (pgoutput proto v1), after the 1-byte 'C' tag:
-    #   [1]      Int8   flags         - unused in v1, always 0
-    #   [2:10]   Int64  commit LSN    - LSN of this transaction's commit record
-    #   [10:18]  Int64  end LSN       - position just PAST the transaction (next record)
-    #   [18:26]  Int64  commit time   - microseconds since 2000-01-01
-    # ">BQQq": B=flags (1B), Q=commit LSN (8B), Q=end LSN (8B), q=commit time (8B).
-    # payload[1:26] is exactly 25 bytes = 1 + 8 + 8 + 8.
-    flags, commit_lsn, end_lsn, commit_time = struct.unpack(">BQQq", payload[1:26])
-    print(
-        f"    [C] Commit  commitLSN={format_lsn(commit_lsn)}  "
-        f"endLSN={format_lsn(end_lsn)}  committedAt={format_pgtime(commit_time)}"
-    )
-
-def handle_xlogdata(frame: bytes) -> None:
+def handle_xlogdata(frame: bytes, decoder: Decoder) -> None:
     # 'w' (XLogData) layout, byte by byte:
     # [0]              'w'                (1byte) the type tag, already read by the dispathcer
     # [1:9]            dataStart LSN      (8byte) wher this chunk of WAL data begins
@@ -105,7 +76,7 @@ def handle_xlogdata(frame: bytes) -> None:
     print(f"    dataStart = {format_lsn(data_start)}")
     print(f"    walEnd    = {format_lsn(wal_end)}")
     print(f"    sentAt    = {format_pgtime(server_time)}")
-    handle_payload(payload)
+    handle_payload(payload, decoder)
 
 
 def handle_keepalive(frame: bytes) -> None:
@@ -132,6 +103,8 @@ def start_binary_stream() -> None:
         # as replication streaming is a low-level job, normal cursor won't do.
         # pgconn is the raw libpq connection object underneath psycopg.
         pgconn = conn.pgconn
+
+        decoder = Decoder()
 
         # start logical replication on our slot, ask pgoutput for our publication.
         start_cmd = (
@@ -169,7 +142,7 @@ def start_binary_stream() -> None:
                 # chr() turns it into its character ('w').
                 msg_type = chr(frame[0])
                 if msg_type == "w":
-                    handle_xlogdata(frame)
+                    handle_xlogdata(frame, decoder)
                 elif msg_type == "k":
                     handle_keepalive(frame)
                 else:
