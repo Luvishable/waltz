@@ -10,6 +10,7 @@ pgoutput decoder: bytes in, structured ChangeEvents out.
       which gets stamped onto each emitted event.
 """
 
+import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -25,6 +26,26 @@ PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 def _pg_micros_to_datetime(micros: int) -> datetime:
     # offset the PG epoch by the message's microsecond count
     return PG_EPOCH + timedelta(microseconds=micros)
+
+
+class Sentinel(enum.Enum):
+    """
+    A special marker distinct from both None and actual values.
+
+    pgouput may mark a column as unchanged ('u') during UPDATEs. This means
+    the value was not modified and was omitted from the WAL record, not that
+    it became NULL.
+    """
+
+    UNCHANGED = "unchanged"
+
+    def __repr__(self) -> str:
+        # Instead of ugly <Sentinel.UNCHANGED: 'unchanged'>, make it appear 'UNCHANGED'
+        return self.name
+
+type Row = dict[str, str | None | Sentinel]
+
+type Op = Literal["INSERT", "UPDATE", "DELETE"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,9 +82,9 @@ class ChangeEvent:
     lsn: int        # commit LSN of the owning transaction (from Begin)
     schema: str
     table: str
-    op: Literal["INSERT", "UPDATE", "DELETE"]
-    new: dict[str, str | None] | None       # values after (INSERT/UPDATE)
-    old: dict[str, str | None] | None       # values before (UPDATE/DELETE)
+    op: Op
+    new: Row | None     # latest values (INSERT / UPDATE)
+    old: Row | None     # previous values (UPDATE / DELETE; the shape depends on the replica identity
     commit_time: datetime | None
 
 
@@ -74,7 +95,7 @@ class Decoder:
 
     def __init__(self) -> None:
         # Survives across transactions: relations are declared once, reused for every
-        # following row change until the schema changes or we reconnect.
+        # following row change until the schema changes, or we reconnect.
         self._relations: dict[int, RelationInfo] = {}
         # Reset every transaction (Begin sets, Commit clears):
         self._commit_time: datetime | None = None
@@ -97,6 +118,10 @@ class Decoder:
             return None
         if tag == "I":
             return self._handle_insert(reader)
+        if tag == "U":
+            return self._handle_update(reader)
+        if tag == "D":
+            return self._handle_delete(reader)
 
         # U / D / Y / O / T -> next chunks. Silently ignore for now.
         return None
@@ -119,6 +144,36 @@ class Decoder:
         self._commit_time = None
         self._final_lsn = None
         self._xid = None
+
+    def _require_relation(self, oid: int, op: Op) -> RelationInfo:
+        # Row change messages only contain a relation OID. The schema must have been
+        # cached from an earlier Relation message; otherwise we cannot decode the row.
+        relation  = self._relations.get(oid)
+        if relation is None:
+            raise KeyError(f"{op} for unknown OID {oid}; no Relation cached")
+        return relation
+
+    def _row_event(
+            self,
+            op: Op,
+            relation: RelationInfo,
+            *,
+            new: Row | None,
+            old: Row | None
+    ) -> ChangeEvent:
+        # Attach the current transaction context (from BEGIN) to the event.
+        # This is the single place where we enforce that a BEGIN must have been seen
+        if self._final_lsn is None:
+            raise RuntimeError(f"{op} outside a transaction: no BEGIN seen")
+        return ChangeEvent(
+            lsn=self._final_lsn,
+            schema=relation.namespace,
+            table=relation.name,
+            op=op,
+            new=new,
+            old=old,
+            commit_time=self._commit_time
+        )
 
     def _handle_begin(self, reader: Reader) -> None:
         # Begin (after the 'B' tag): Int64 final/commit LSN, Int64 commit time, Int32 xid.
@@ -149,6 +204,52 @@ class Decoder:
             columns=columns,
         )
 
+    def _handle_insert(self, reader: Reader) -> ChangeEvent:
+        # Insert (after the 'I' tag): Int32 relation OID, Byte1 'N', then TupleData.
+        oid = reader.uint32()
+        relation = self._require_relation(oid, "INSERT")
+
+        reader.char()   # the 'N' marker (new tuple): always 'N' for INSERT
+        new = self._read_tuple(reader, relation)
+
+        return self._row_event("INSERT", relation, new=new, old=None)
+
+    def _handle_update(self, reader: Reader) -> ChangeEvent:
+        # Update ('U'): Int32 relation OID, an optional old tuple, then the new tuple.
+        #   'K' -> old contains only key columns (REPLICA IDENTITY DEFAULT/INDEX, key changed)
+        #   'O' -> old contains the full previous row (REPLICA IDENTITY FULL)
+        #   'N' -> no old tuple; the new tuple starts here
+        oid = reader.uint32()
+        relation = self._require_relation(oid, "UPDATE")
+
+        marker = reader.char()
+        if marker in ("K", "O"):
+            old = self._read_tuple(reader, relation, key_only=(marker == "K"))
+            if reader.char() != "N":
+                raise ValueError("UPDATE: 'N' marker is expected after old tuple")
+            new = self._read_tuple(reader, relation)
+        elif marker == "N":
+            old = None
+            new = self._read_tuple(reader, relation)
+        else:
+            raise ValueError(f"Unexpected marker inside UPDATE: {marker!r}")
+
+        return self._row_event("UPDATE", relation, new=new, old=old)
+
+    def _handle_delete(self, reader: Reader) -> ChangeEvent:
+        # Delete ('D'): Int32 relation OID, followed by a full old tuple. No new tuple.
+        #   'K' -> old contains only key columns (REPLICA IDENTITY DEFAULT/INDEX)
+        #   'O' -> old contains the full previous row (REPLICA IDENTITY FULL)
+        oid = reader.uint32()
+        relation = self._require_relation(oid, "DELETE")
+
+        marker = reader.char()
+        if marker not in ("K", "O"):
+            raise ValueError(f"Unexpected marker inside DELETE: {marker!r}")
+        old = self._read_tuple(reader, relation, key_only=(marker == "K"))
+
+        return self._row_event("DELETE", relation, new=None, old=old)
+
     @staticmethod
     def _read_column(reader: Reader) -> Column:
         # Per column: Int8 flags, String name, Int32 type OID, Int32 atttypmod.
@@ -163,59 +264,35 @@ class Decoder:
             type_modifier=type_modifier,
         )
 
-    def _handle_insert(self, reader: Reader) -> ChangeEvent:
-        # Insert (after the 'I' tag): Int32 relation OID, Byte1 'N', then TupleData.
-        oid = reader.uint32()
-        relation = self._relations.get(oid)
-        if relation is None:
-            # Protocol guarantees Relation precedes its row changes; if not, our
-            # cache is wrong (e.g. we connected mid-stream) and we cannot decode.
-            raise KeyError(f"INSERT for unknown OID {oid}; no Relation cached")
-        if self._final_lsn is None:
-            raise RuntimeError("INSERT outside a transaction: no BEGIN seen")
-
-        reader.char()   # the 'N' marker (new tuple): always 'N' for INSERT
-        new = self._read_tuple(reader, relation)
-
-        return ChangeEvent(
-            lsn=self._final_lsn,
-            schema=relation.namespace,
-            table=relation.name,
-            op="INSERT",
-            new=new,
-            old=None,
-            commit_time=self._commit_time
-        )
-
     @staticmethod
-    def _read_tuple(reader: Reader, relation: RelationInfo) -> dict[str, str | None]:
-        # the info about how many columns will be inserted:
+    def _read_tuple(reader, relation: RelationInfo, *, key_only: bool = False) -> Row:
         column_count = reader.uint16()
-        # create a column_name: value dict. column_name info already caught when
-        # reading the relation frame and cached in the state
-        values: dict[str, str | None] = {}
+        values: Row = {}
         for index in range(column_count):
-            # determine which column's value are being read
             column = relation.columns[index]
-            # kind ('t' , 'u' , 'n') determines what will come as the value of
-            # present column.
-            # 't'   ->      there comes a text but it might be big so TOAST table can be utilized
-            #               and the value can be read directly from the TOAST table.
-            # 'n'   ->      null
-            # 'u'   ->      the value didn't change. previous value can be used as the new value
-
             kind = reader.char()
             if kind == "n":
-                values[column.name] = None
+                value: str | None | Sentinel = None
             elif kind == "u":
-                # FIXME: conflated with NULL until we handle TOAST in the UPDATE step.
-                values[column.name] = None
+                # 'u' -> Unchanged TOAST value: it's not written to WAL again, just skipped.
+                # However, this doesn't mean NULL so mark it as UNCHANGED
+                value = Sentinel.UNCHANGED
             elif kind == "t":
                 length = reader.uint32()
-                values[column.name] = reader.read_bytes(length).decode("utf-8")
+                value = reader.read_bytes(length).decode("utf-8")
             else:
-                raise ValueError(f"Unknown TupleData value kind {kind!r}")
+                raise ValueError(f"Unknown TupleData value kind: {kind!r}")
+
+            # In a key tuple (REPLICA IDENTITY DEFAULT/INDEX), the wire format still
+            # includes all columns positionally, but non-identity columns are sent as NULL.
+            # These are placeholders, not actual data, so skip them and keep only the key.
+            if key_only and not column.is_key:
+                continue
+            values[column.name] = value
+
         return values
+
+
 
 
 
