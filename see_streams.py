@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from psycopg import pq
 
 from waltz.decoder import Decoder
+from waltz.lsn import format_lsn
 
 load_dotenv()
 
@@ -29,14 +30,6 @@ PUBLICATION_NAME = "waltz_pub"
 
 # Postgres timestamps count microseconds from 2000-01-01 UTC, NOT the Unix epoch(1970)
 PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
-
-
-def format_lsn(lsn: int) -> str:
-    # An LSN is one 64-bit number, but Postgres prints it as two 32-bit halves in hex.
-    #   lsn >> 32        -> shift the top 32 bits down   = "high" half
-    #   lsn & 0xFFFFFFFF -> keep only the bottom 32 bits = "low" half
-    #   :X               -> uppercase hex, no zero padding (same as Postgres)
-    return f"{lsn >> 32:X}/{lsn & 0xFFFFFFFF:X}"
 
 
 def format_pgtime(micros: int) -> str:
