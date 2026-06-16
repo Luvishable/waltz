@@ -11,3 +11,7 @@ wheels/
 docs/
 .idea/
 .env
+
+# Runtime state
+waltz.lsn
+waltz.lsn.tmp

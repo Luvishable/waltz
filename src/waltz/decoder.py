@@ -123,7 +123,6 @@ class Decoder:
         if tag == "D":
             return self._handle_delete(reader)
 
-        # U / D / Y / O / T -> next chunks. Silently ignore for now.
         return None
 
     def clear(self) -> None:
