@@ -10,35 +10,14 @@ pgoutput decoder: bytes in, structured ChangeEvents out.
       which gets stamped onto each emitted event.
 """
 
-import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Literal
 
 from waltz.reader import Reader
 from waltz.pgtime import micros_to_datetime
-
-
-class Sentinel(enum.Enum):
-    """
-    A special marker distinct from both None and actual values.
-
-    pgouput may mark a column as unchanged ('u') during UPDATEs. This means
-    the value was not modified and was omitted from the WAL record, not that
-    it became NULL.
-    """
-
-    UNCHANGED = "unchanged"
-
-    def __repr__(self) -> str:
-        # Instead of ugly <Sentinel.UNCHANGED: 'unchanged'>, make it appear 'UNCHANGED'
-        return self.name
-
-type Row = dict[str, str | None | Sentinel]
-
-type Op = Literal["INSERT", "UPDATE", "DELETE"]
+from waltz.events import ChangeEvent, Sentinel, Row, Op
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,21 +43,6 @@ class RelationInfo:
     name: str
     replica_identity: str           # 'd' default / 'n' nothing / 'f' full / 'i' index
     columns: tuple[Column, ...]     # frozen value object must stay immutable
-
-
-@dataclass(frozen=True, slots=True)
-class ChangeEvent:
-    """
-    A single row change
-    """
-
-    lsn: int        # commit LSN of the owning transaction (from Begin)
-    schema: str
-    table: str
-    op: Op
-    new: Row | None     # latest values (INSERT / UPDATE)
-    old: Row | None     # previous values (UPDATE / DELETE; the shape depends on the replica identity
-    commit_time: datetime | None
 
 
 class Decoder:
