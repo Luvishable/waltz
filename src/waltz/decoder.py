@@ -13,19 +13,12 @@ pgoutput decoder: bytes in, structured ChangeEvents out.
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from types import MappingProxyType
 from typing import Literal
 
 from waltz.reader import Reader
-
-# Postgres timestamps count microseconds from 2000-01-01 UTC, not the Unix epoch
-PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
-
-
-def _pg_micros_to_datetime(micros: int) -> datetime:
-    # offset the PG epoch by the message's microsecond count
-    return PG_EPOCH + timedelta(microseconds=micros)
+from waltz.pgtime import micros_to_datetime
 
 
 class Sentinel(enum.Enum):
@@ -177,7 +170,7 @@ class Decoder:
     def _handle_begin(self, reader: Reader) -> None:
         # Begin (after the 'B' tag): Int64 final/commit LSN, Int64 commit time, Int32 xid.
         self._final_lsn = reader.uint64()
-        self._commit_time = _pg_micros_to_datetime(reader.int64())
+        self._commit_time = micros_to_datetime(reader.int64())
         self._xid = reader.uint32()
 
     def _handle_relation(self, reader: Reader) -> None:

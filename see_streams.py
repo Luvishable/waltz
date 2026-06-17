@@ -1,6 +1,5 @@
 import os
 import struct
-from datetime import datetime, timedelta, timezone
 
 import psycopg
 from dotenv import load_dotenv
@@ -10,6 +9,7 @@ from waltz.checkpoint import FileCheckpoint
 from waltz.feedback import build_standby_status_update
 from waltz.decoder import ChangeEvent, Decoder
 from waltz.lsn import format_lsn
+from waltz.pgtime import micros_to_datetime
 
 load_dotenv()
 
@@ -31,14 +31,6 @@ DB_PARAMS = {
 SLOT_NAME = "waltz_slot_pgo"
 PUBLICATION_NAME = "waltz_pub"
 CHECKPOINT_PATH = "waltz.lsn"   # "how far did I process" recorder
-
-# Postgres timestamps count microseconds from 2000-01-01 UTC, NOT the Unix epoch(1970)
-PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
-
-
-def format_pgtime(micros: int) -> str:
-    # Add the microsecond offset onto Postgres' own epoch to get a real datetime.
-    return (PG_EPOCH + timedelta(microseconds=micros)).isoformat()
 
 
 def handle_payload(payload: bytes, decoder: Decoder) -> ChangeEvent | None:
@@ -69,7 +61,7 @@ def handle_xlogdata(frame: bytes, decoder: Decoder) -> ChangeEvent | None:
     data_start, wal_end, server_time = struct.unpack(">QQq", frame[1:25])
     payload = frame[25:]    # everything after the 25-byte header is the inner message
 
-    print(f"    sentAt    = {format_pgtime(server_time)}")
+    print(f"    sentAt    = {micros_to_datetime(server_time)}")
     # The payload is a *decoded* pgoutput message; its length is unrelated to any LSN.
     # So the loop confirms progress from the event's commit LSN, not from this frame.
     return handle_payload(payload, decoder)

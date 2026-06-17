@@ -19,9 +19,8 @@ Why the server needs it:
 """
 
 import struct
-from datetime import datetime, timedelta, timezone
+from waltz.pgtime import now_micros
 
-PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 # Standby status update ('r'), client -> server. Big-endian (network byte order):
 #   Byte1  'r'              message tag
@@ -33,9 +32,6 @@ PG_EPOCH = datetime(2000, 1, 1, tzinfo=timezone.utc)
 # Total 34 bytes. struct.Struct precompiles the format once for repeated packing.
 _STANDBY_STATUS = struct.Struct(">cQQQqB")
 
-
-def _now_micros() -> int:
-    return (datetime.now(timezone.utc) - PG_EPOCH) // timedelta(microseconds=1)
 
 def build_standby_status_update(
         *,
@@ -54,7 +50,7 @@ def build_standby_status_update(
     this stays a pure, deterministic function in tests.
     """
     if clock_micros is None:
-        clock_micros = _now_micros()
+        clock_micros = now_micros()
     return _STANDBY_STATUS.pack(
         b"r",
         write_lsn,
