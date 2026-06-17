@@ -17,7 +17,6 @@ feedback, so a crash can only replay events, never lose them (at-least once prin
 import psycopg
 from psycopg import pq
 
-from waltz import checkpoint
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig
 from waltz.decoder import Decoder
@@ -62,14 +61,14 @@ class StreamManager:
         assert self._pgconn is not None
         # Resume from our durable record. If it is None in the first run, then
         # start at 0/0, which means "use the slot's own confirmed position"
-        resume_lsn = checkpoint.read()
-        self._last_lsn = resume_lsn
+        resume_lsn = self._checkpoint.read()
+        self._last_lsn = resume_lsn or 0
         start_at = format_lsn(resume_lsn) if resume_lsn is not None else "0/0"
         print(f"Resuming from {start_at}")
 
         start_cmd = (
             f"START_REPLICATION SLOT {self._config.slot} LOGICAL {start_at} "
-            f"(proto_version '1', publication names '{self._config.publication}')"
+            f"(proto_version '1', publication_names '{self._config.publication}')"
         ).encode()
 
         res = self._pgconn.exec_(start_cmd)
