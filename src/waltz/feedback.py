@@ -19,8 +19,8 @@ Why the server needs it:
 """
 
 import struct
-from waltz.pgtime import now_micros
 
+from waltz.pgtime import now_micros
 
 # Standby status update ('r'), client -> server. Big-endian (network byte order):
 #   Byte1  'r'              message tag
@@ -34,12 +34,12 @@ _STANDBY_STATUS = struct.Struct(">cQQQqB")
 
 
 def build_standby_status_update(
-        *,
-        write_lsn: int,
-        flush_lsn: int,
-        apply_lsn: int,
-        reply_requested: bool = False,
-        clock_micros: int | None = None,
+    *,
+    write_lsn: int,
+    flush_lsn: int,
+    apply_lsn: int,
+    reply_requested: bool = False,
+    clock_micros: int | None = None,
 ) -> bytes:
     """
     Build one Standby status update message.
@@ -59,31 +59,3 @@ def build_standby_status_update(
         clock_micros,
         1 if reply_requested else 0,
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

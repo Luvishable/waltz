@@ -18,3 +18,26 @@ waltz = "waltz:main"
 [build-system]
 requires = ["uv_build>=0.9.27,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "mypy>=2.1.0",
+    "pytest>=9.1.0",
+    "ruff>=0.15.17",
+]
+
+[tool.ruff]
+# Black's default is 88; we use 100 to fit waltz's explanatory comments
+# without forcing awkward wraps. target-version is inferred from requires-python.
+line-length = 100
+
+[tool.ruff.lint]
+# E/W pycodestyle, F pyflakes (catches real bugs like unused vars), I import
+# sorting, B bugbear, UP modern-syntax upgrades, C4 comprehensions,
+# SIM simplifications, RUF ruff-specific rules.
+select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.14"
+strict = true
+files = ["src"]

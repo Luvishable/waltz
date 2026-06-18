@@ -58,37 +58,3 @@ def parse_xlogdata(frame: bytes) -> XLogData:
 def parse_keepalive(frame: bytes) -> PrimaryKeepalive:
     wal_end, server_time, reply_flag = _KEEPALIVE.unpack_from(frame, 1)
     return PrimaryKeepalive(wal_end, server_time, reply_flag)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

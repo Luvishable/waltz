@@ -34,39 +34,10 @@ class ChangeEvent:
     A single row change.
     """
 
-    lsn: int    # commit LSN of the owning transaction
+    lsn: int  # commit LSN of the owning transaction
     schema: str
     table: str
     op: Op
     new: Row | None
     old: Row | None
     commit_time: datetime | None
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

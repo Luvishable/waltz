@@ -38,7 +38,7 @@ class FileCheckpoint:
         try:
             text = self._path.read_text().strip()
         except FileNotFoundError:
-            return None     # no checkpoint yet
+            return None  # no checkpoint yet
         if not text:
             return None
         return parse_lsn(text)
@@ -57,5 +57,3 @@ class FileCheckpoint:
             os.fsync(f.fileno())
         # atomic swap
         os.replace(tmp, self._path)
-
-

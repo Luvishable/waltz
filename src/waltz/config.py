@@ -4,6 +4,7 @@ import os
 from dataclasses import dataclass
 
 from dotenv import load_dotenv
+from psycopg.conninfo import make_conninfo
 
 
 def _require_env(name: str) -> str:
@@ -16,7 +17,6 @@ def _require_env(name: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class StreamConfig:
-
     host: str
     port: int
     user: str
@@ -41,13 +41,14 @@ class StreamConfig:
             checkpoint_path=os.getenv("WALTZ_CHECKPOINT", "waltz.lsn"),
         )
 
-    def libpq_params(self) -> dict[str, str | int]:
-        # kwargs that psycopg.connect needs.
-        return {
-            "host": self.host,
-            "port": self.port,
-            "user": self.user,
-            "password": self.password,
-            "dbname": self.dbname,
-            "replication": "database"
-        }
+    def conninfo(self) -> str:
+        # Build a psycopg-ready connection string. replication=database switches
+        # the connection into logical replication mode; it is fixed, not user config.
+        return make_conninfo(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            dbname=self.dbname,
+            replication="database",
+        )

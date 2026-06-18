@@ -17,4 +17,3 @@ def main() -> None:
     decoder = Decoder()
     manager = StreamManager(config, checkpoint, decoder)
     manager.run()
-

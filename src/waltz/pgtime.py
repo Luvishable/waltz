@@ -6,9 +6,9 @@ unix epoch (1970).
 These helpers make conversions in both directions.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
-PG_EPOCH = datetime(2000,1,1, tzinfo=timezone.utc)
+PG_EPOCH = datetime(2000, 1, 1, tzinfo=UTC)
 
 
 def micros_to_datetime(micros: int) -> datetime:
@@ -21,5 +21,4 @@ def datetime_to_micros(dt: datetime) -> int:
 
 def now_micros() -> int:
     # current moment as microseconds since PG epoch
-    return datetime_to_micros(datetime.now(timezone.utc))
-
+    return datetime_to_micros(datetime.now(UTC))

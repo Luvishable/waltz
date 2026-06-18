@@ -32,15 +32,15 @@ class StreamManager:
     """
 
     def __init__(
-            self,
-            config: StreamConfig,
-            checkpoint: Checkpoint,
-            decoder: Decoder,
+        self,
+        config: StreamConfig,
+        checkpoint: Checkpoint,
+        decoder: Decoder,
     ) -> None:
         self._config = config
         self._checkpoint = checkpoint
         self._decoder = decoder
-        self._pgconn: pq.PGconn | None = None
+        self._pgconn: pq.abc.PGconn | None = None
         # highest LSN we have confirmed; feedback must never go backwards.
         self._last_lsn = 0
 
@@ -48,7 +48,7 @@ class StreamManager:
         """
         Open the connection, start replication, and loop until stopped.
         """
-        conn = psycopg.connect(**self._config.libpq_params(), autocommit=True)
+        conn = psycopg.connect(self._config.conninfo(), autocommit=True)
         with conn:
             # replication streaming is a low-level job; the raw libpq connection
             # (pgconn) underneath psycopg is what speaks COPY_BOTH
@@ -116,7 +116,7 @@ class StreamManager:
         xlog = parse_xlogdata(frame)
         event = self._decoder.feed(xlog.payload)
         if event is None:
-            return    # structural message (Begin/Commit/Relation); nothing to emit
+            return  # structural message (Begin/Commit/Relation); nothing to emit
         self._emit(event)
         if event.lsn > self._last_lsn:
             self._last_lsn = event.lsn
@@ -143,102 +143,8 @@ class StreamManager:
         self._checkpoint.write(lsn)
         # 2) only after that, tell PG it may release WAL up to here
         msg = build_standby_status_update(write_lsn=lsn, flush_lsn=lsn, apply_lsn=lsn)
+        # 3) queue the standby status update onto the COPY stream
+        self._pgconn.put_copy_data(msg)
         # flush pushes our buffered message onto the socket
         self._pgconn.flush()
         print(f"    -> feedback flush={format_lsn(lsn)}")
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

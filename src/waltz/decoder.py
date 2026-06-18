@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 
-from waltz.reader import Reader
+from waltz.events import ChangeEvent, Op, Row, Sentinel
 from waltz.pgtime import micros_to_datetime
-from waltz.events import ChangeEvent, Sentinel, Row, Op
+from waltz.reader import Reader
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,9 +27,9 @@ class Column:
     """
 
     name: str
-    is_key: bool            # part of REPLICA IDENTITY key (matters for UPDATE/DELETE old)
-    type_oid: int           # Postgres type OID
-    type_modifier: int      # atttypemod, -1 = none (signed)
+    is_key: bool  # part of REPLICA IDENTITY key (matters for UPDATE/DELETE old)
+    type_oid: int  # Postgres type OID
+    type_modifier: int  # atttypemod, -1 = none (signed)
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,10 +39,10 @@ class RelationInfo:
     """
 
     oid: int
-    namespace: str                  # schema name; empty string means pg_catalog
+    namespace: str  # schema name; empty string means pg_catalog
     name: str
-    replica_identity: str           # 'd' default / 'n' nothing / 'f' full / 'i' index
-    columns: tuple[Column, ...]     # frozen value object must stay immutable
+    replica_identity: str  # 'd' default / 'n' nothing / 'f' full / 'i' index
+    columns: tuple[Column, ...]  # frozen value object must stay immutable
 
 
 class Decoder:
@@ -62,13 +62,13 @@ class Decoder:
     def feed(self, payload: bytes) -> ChangeEvent | None:
         """One pgoutput message in. A ChangeEvent for I/U/D and None for structural ones."""
         reader = Reader(payload)
-        tag = reader.char()     # Consume the 1-byte message-type tag
+        tag = reader.char()  # Consume the 1-byte message-type tag
 
         if tag == "B":
             self._handle_begin(reader)
             return None
         if tag == "C":
-            self._reset_transaction()   # transaction closed; context no longer valid
+            self._reset_transaction()  # transaction closed; context no longer valid
             return None
         if tag == "R":
             self._handle_relation(reader)
@@ -104,18 +104,13 @@ class Decoder:
     def _require_relation(self, oid: int, op: Op) -> RelationInfo:
         # Row change messages only contain a relation OID. The schema must have been
         # cached from an earlier Relation message; otherwise we cannot decode the row.
-        relation  = self._relations.get(oid)
+        relation = self._relations.get(oid)
         if relation is None:
             raise KeyError(f"{op} for unknown OID {oid}; no Relation cached")
         return relation
 
     def _row_event(
-            self,
-            op: Op,
-            relation: RelationInfo,
-            *,
-            new: Row | None,
-            old: Row | None
+        self, op: Op, relation: RelationInfo, *, new: Row | None, old: Row | None
     ) -> ChangeEvent:
         # Attach the current transaction context (from BEGIN) to the event.
         # This is the single place where we enforce that a BEGIN must have been seen
@@ -128,7 +123,7 @@ class Decoder:
             op=op,
             new=new,
             old=old,
-            commit_time=self._commit_time
+            commit_time=self._commit_time,
         )
 
     def _handle_begin(self, reader: Reader) -> None:
@@ -165,7 +160,7 @@ class Decoder:
         oid = reader.uint32()
         relation = self._require_relation(oid, "INSERT")
 
-        reader.char()   # the 'N' marker (new tuple): always 'N' for INSERT
+        reader.char()  # the 'N' marker (new tuple): always 'N' for INSERT
         new = self._read_tuple(reader, relation)
 
         return self._row_event("INSERT", relation, new=new, old=None)
@@ -221,7 +216,7 @@ class Decoder:
         )
 
     @staticmethod
-    def _read_tuple(reader, relation: RelationInfo, *, key_only: bool = False) -> Row:
+    def _read_tuple(reader: Reader, relation: RelationInfo, *, key_only: bool = False) -> Row:
         column_count = reader.uint16()
         values: Row = {}
         for index in range(column_count):
@@ -247,62 +242,3 @@ class Decoder:
             values[column.name] = value
 
         return values
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
