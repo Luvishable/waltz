@@ -41,3 +41,6 @@ select = ["E", "W", "F", "I", "B", "UP", "C4", "SIM", "RUF"]
 python_version = "3.14"
 strict = true
 files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
