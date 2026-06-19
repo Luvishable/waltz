@@ -37,7 +37,7 @@ def test_empty_string_is_a_lone_nul():
 
 
 def test_string_decodes_utf8():
-    reader = Reader("cafe\x00".encode())
+    reader = Reader(b"cafe\x00")
     assert reader.string() == "cafe"
 
 

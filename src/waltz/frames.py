@@ -23,7 +23,7 @@ from dataclasses import dataclass
 #    Int64    serverTime    send time, microseconds since 2000-01-01 (signed)
 #    ByteN    payload       the pgoutput message itself
 # The fixed header after the tag is exactly 24 bytes = 8 + 8 + 8
-_XLOGDATA_HEADER = struct.Struct("QQq")
+_XLOGDATA_HEADER = struct.Struct(">QQq")
 
 # Primary keepalive ('k'), server -> client:
 #    Byte1  'k'           message tag
@@ -57,4 +57,4 @@ def parse_xlogdata(frame: bytes) -> XLogData:
 
 def parse_keepalive(frame: bytes) -> PrimaryKeepalive:
     wal_end, server_time, reply_flag = _KEEPALIVE.unpack_from(frame, 1)
-    return PrimaryKeepalive(wal_end, server_time, reply_flag)
+    return PrimaryKeepalive(wal_end, server_time, bool(reply_flag))

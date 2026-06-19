@@ -12,7 +12,7 @@ from waltz.pgtime import (
 
 def test_pg_epoch_anchors_at_zero():
     # The whole module hinges on this: 0 micros == 2000-01-01 UTC, not 1970
-    assert PG_EPOCH == datetime(2000, 1, 1, tzinfo=UTC)
+    assert datetime(2000, 1, 1, tzinfo=UTC) == PG_EPOCH
     assert micros_to_datetime(0) == PG_EPOCH
     assert datetime_to_micros(PG_EPOCH) == 0
 
