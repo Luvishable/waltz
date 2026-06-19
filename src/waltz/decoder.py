@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 
-from waltz.events import ChangeEvent, Op, Row, Sentinel
+from waltz.events import ChangeEvent, Commit, Op, Row, Sentinel
 from waltz.pgtime import micros_to_datetime
 from waltz.reader import Reader
 
@@ -59,7 +59,7 @@ class Decoder:
         self._final_lsn: int | None = None
         self._xid: int | None = None
 
-    def feed(self, payload: bytes) -> ChangeEvent | None:
+    def feed(self, payload: bytes) -> ChangeEvent | Commit | None:
         """One pgoutput message in. A ChangeEvent for I/U/D and None for structural ones."""
         reader = Reader(payload)
         tag = reader.char()  # Consume the 1-byte message-type tag
@@ -68,8 +68,7 @@ class Decoder:
             self._handle_begin(reader)
             return None
         if tag == "C":
-            self._reset_transaction()  # transaction closed; context no longer valid
-            return None
+            return self._handle_commit(reader)
         if tag == "R":
             self._handle_relation(reader)
             return None
@@ -200,6 +199,19 @@ class Decoder:
         old = self._read_tuple(reader, relation, key_only=(marker == "K"))
 
         return self._row_event("DELETE", relation, new=None, old=old)
+
+    def _handle_commit(self, reader: Reader) -> Commit:
+        # Commit (after 'C' tag):
+        #   Int8  -> flags
+        #   Int64 -> commit LSN (LSN of the commit record; matches BEGIN's final LSN)
+        #   Int64 -> end LSN (transaction boundary; this is what we gonna confirm)
+        #   Int64 -> commit time
+        reader.uint8()
+        reader.uint64()
+        end_lsn = reader.uint64()
+        commit_time = micros_to_datetime(reader.int64())
+        self._reset_transaction()
+        return Commit(end_lsn=end_lsn, commit_time=commit_time)
 
     @staticmethod
     def _read_column(reader: Reader) -> Column:

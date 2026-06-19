@@ -5,6 +5,7 @@ waltz: a pure Python CDC service for PostgreSQL logical replication.
 from waltz.checkpoint import FileCheckpoint
 from waltz.config import StreamConfig
 from waltz.decoder import Decoder
+from waltz.sink import StdoutSink
 from waltz.stream import StreamManager
 
 
@@ -15,5 +16,6 @@ def main() -> None:
     config = StreamConfig.from_env()
     checkpoint = FileCheckpoint(config.checkpoint_path)
     decoder = Decoder()
-    manager = StreamManager(config, checkpoint, decoder)
+    sink = StdoutSink()
+    manager = StreamManager(config, checkpoint, decoder, sink)
     manager.run()

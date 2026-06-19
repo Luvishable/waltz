@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from waltz.decoder import Decoder
-from waltz.events import ChangeEvent, Sentinel
+from waltz.events import ChangeEvent, Commit, Sentinel
 from waltz.pgtime import datetime_to_micros
 
 # The running example from the notes: public.employees, OID 16385,
@@ -24,8 +24,9 @@ def begin(*, final_lsn, commit_micros=0, xid=1):
     return b"B" + struct.pack(">QqI", final_lsn, commit_micros, xid)
 
 
-def commit():
-    return b"C"
+def commit(*, commit_lsn=0, end_lsn=0, commit_micros=0):
+    # Commit body: Int8 flags, Int64 commit LSN, Int64 end LSN, Int64 commit time.
+    return b"C" + struct.pack(">BQQq", 0, commit_lsn, end_lsn, commit_micros)
 
 
 def relation(*, oid, namespace, name, replica_identity, columns):
@@ -108,11 +109,21 @@ def test_insert_for_unknown_oid_raises():
         d.feed(insert(oid=99999, values=[("t", "1"), ("t", "x")]))
 
 
+def test_commit_returns_commit_event():
+    # The decoder must surface the transaction boundary so the stream manager knows
+    # when it is safe to flush + confirm. end_lsn (not commit LSN) is what we report.
+    d = Decoder()
+    d.feed(begin(final_lsn=0x16B3748, commit_micros=COMMIT_MICROS))
+    result = d.feed(commit(commit_lsn=0x16B3748, end_lsn=0x16B3800,
+                           commit_micros=COMMIT_MICROS))
+    assert result == Commit(end_lsn=0x16B3800, commit_time=COMMIT_TIME)
+
+
 def test_commit_resets_transaction_context():
     d = Decoder()
     d.feed(_emp_relation())
     d.feed(begin(final_lsn=1))
-    assert d.feed(commit()) is None
+    d.feed(commit(commit_lsn=1, end_lsn=2))
     with pytest.raises(RuntimeError, match="no BEGIN"):
         d.feed(insert(oid=OID, values=[("t", "1"), ("t", "Ali")]))
 

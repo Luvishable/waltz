@@ -1,7 +1,7 @@
 import struct
 
 from waltz.config import StreamConfig
-from waltz.events import ChangeEvent
+from waltz.events import ChangeEvent, Commit
 from waltz.stream import StreamManager
 
 
@@ -16,6 +16,10 @@ def _keepalive(*, wal_end, reply_requested):
 def _event(lsn):
     return ChangeEvent(lsn=lsn, schema="public", table="t", op="INSERT",
                        new={"id": "1"}, old=None, commit_time=None)
+
+
+def _commit(end_lsn):
+    return Commit(end_lsn=end_lsn, commit_time=None)
 
 
 class FakeDecoder:
@@ -39,6 +43,17 @@ class FakeCheckpoint:
         self._log.append(("checkpoint", lsn))
 
 
+class FakeSink:
+    def __init__(self, log):
+        self._log = log
+
+    def write(self, event):
+        self._log.append(("write", event.lsn))
+
+    def flush(self):
+        self._log.append(("sink_flush",))
+
+
 class FakePgConn:
     def __init__(self, log):
         self._log = log
@@ -55,39 +70,65 @@ def _manager(decoder_results, *, initial_lsn=None):
     config = StreamConfig(host="h", port=1, user="u", password="p", dbname="d",
                           slot="s", publication="pub", checkpoint_path="x")
     manager = StreamManager(config, FakeCheckpoint(log, initial=initial_lsn),
-                            FakeDecoder(decoder_results))
+                            FakeDecoder(decoder_results), FakeSink(log))
     manager._pgconn = FakePgConn(log)
     return manager, log
 
 
-def test_structural_message_sends_no_feedback():
+def test_structural_message_does_nothing():
+    # Begin/Relation -> feed() returns None -> no write, no feedback.
     manager, log = _manager([None])
     manager._handle_xlogdata(_xlogdata(b"begin"))
     assert log == []
 
 
-def test_row_event_triggers_feedback():
+def test_change_event_is_written_but_not_confirmed():
+    # A row is handed to the sink, but progress is NOT confirmed yet: the
+    # transaction is not over, so it is not safe to advance the slot past it.
     manager, log = _manager([_event(100)])
     manager._handle_xlogdata(_xlogdata(b"insert"))
+    assert log == [("write", 100)]
+    assert manager._last_lsn == 0
+
+
+def test_commit_flushes_then_confirms():
+    # At the commit boundary: flush the sink, then checkpoint, then tell Postgres.
+    manager, log = _manager([_commit(100)])
+    manager._handle_xlogdata(_xlogdata(b"commit"))
+    kinds = [k for k, *_ in log]
+    assert kinds == ["sink_flush", "checkpoint", "put_copy_data", "flush"]
     assert manager._last_lsn == 100
-    assert ("checkpoint", 100) in log
-    assert any(k == "put_copy_data" for k, *_ in log)
-
-
-def test_feedback_does_not_go_backwards():
-    manager, log = _manager([_event(100)])
-    manager._last_lsn = 200
-    manager._handle_xlogdata(_xlogdata(b"insert"))
-    assert manager._last_lsn == 200
-    assert log == []
 
 
 def test_checkpoint_is_written_before_feedback():
     # waltz's correctness rule: durably checkpoint, THEN tell Postgres it may advance.
-    manager, log = _manager([_event(100)])
-    manager._handle_xlogdata(_xlogdata(b"insert"))
+    manager, log = _manager([_commit(100)])
+    manager._handle_xlogdata(_xlogdata(b"commit"))
     kinds = [k for k, *_ in log]
     assert kinds.index("checkpoint") < kinds.index("put_copy_data")
+
+
+def test_commit_feedback_does_not_go_backwards():
+    # The sink is still flushed, but nothing at/below our high-water mark is confirmed.
+    manager, log = _manager([_commit(100)])
+    manager._last_lsn = 200
+    manager._handle_xlogdata(_xlogdata(b"commit"))
+    assert log == [("sink_flush",)]
+    assert manager._last_lsn == 200
+
+
+def test_multi_row_transaction_confirms_once_at_commit():
+    # The regression: two rows then one commit. Each row is only written; the single
+    # feedback comes at the commit, after BOTH rows are durably flushed. Previously we
+    # confirmed after the first row and could lose later rows on a crash.
+    manager, log = _manager([_event(100), _event(100), _commit(100)])
+    manager._handle_xlogdata(_xlogdata(b"insert1"))
+    manager._handle_xlogdata(_xlogdata(b"insert2"))
+    assert log == [("write", 100), ("write", 100)]  # no confirm yet
+
+    manager._handle_xlogdata(_xlogdata(b"commit"))
+    kinds = [k for k, *_ in log]
+    assert kinds == ["write", "write", "sink_flush", "checkpoint", "put_copy_data", "flush"]
 
 
 def test_keepalive_without_reply_advances_lsn_silently():

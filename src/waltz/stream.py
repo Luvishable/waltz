@@ -20,10 +20,11 @@ from psycopg import pq
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig
 from waltz.decoder import Decoder
-from waltz.events import ChangeEvent
+from waltz.events import ChangeEvent, Commit
 from waltz.feedback import build_standby_status_update
 from waltz.frames import parse_keepalive, parse_xlogdata
 from waltz.lsn import format_lsn
+from waltz.sink import Sink
 
 
 class StreamManager:
@@ -36,12 +37,13 @@ class StreamManager:
         config: StreamConfig,
         checkpoint: Checkpoint,
         decoder: Decoder,
+        sink: Sink,
     ) -> None:
         self._config = config
         self._checkpoint = checkpoint
         self._decoder = decoder
+        self._sink = sink
         self._pgconn: pq.abc.PGconn | None = None
-        # highest LSN we have confirmed; feedback must never go backwards.
         self._last_lsn = 0
 
     def run(self) -> None:
@@ -114,13 +116,20 @@ class StreamManager:
 
     def _handle_xlogdata(self, frame: bytes) -> None:
         xlog = parse_xlogdata(frame)
-        event = self._decoder.feed(xlog.payload)
-        if event is None:
-            return  # structural message (Begin/Commit/Relation); nothing to emit
-        self._emit(event)
-        if event.lsn > self._last_lsn:
-            self._last_lsn = event.lsn
-            self._send_feedback(self._last_lsn)
+        result = self._decoder.feed(xlog.payload)
+
+        if isinstance(result, ChangeEvent):
+            # Hand the row to the sink, but do NOT confirm progress yet: the
+            # transaction isn't finished; so it is not safe to advance the slot past it
+            self._sink.write(result)
+        elif isinstance(result, Commit):
+            # Transaction boundary: make every buffered wo durable, only then confirm up
+            # to the transaction's end so PG may release WAL.
+            self._sink.flush()
+            if result.end_lsn > self._last_lsn:
+                self._last_lsn = result.end_lsn
+                self._send_feedback(self._last_lsn)
+        # else: structural message (Begin/Relation) -> feed() returned None; nothing to do.
 
     def _handle_keepalive(self, frame: bytes) -> None:
         keepalive = parse_keepalive(frame)
@@ -132,10 +141,6 @@ class StreamManager:
             self._send_feedback(self._last_lsn)
 
     # ---------------------- OUTPUT & FEEDBACK ----------------------
-
-    def _emit(self, event: ChangeEvent) -> None:
-        # Placeholder output. The sink layer will replace this body next step
-        print(f"    {event}")
 
     def _send_feedback(self, lsn: int) -> None:
         assert self._pgconn is not None

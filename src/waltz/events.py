@@ -41,3 +41,21 @@ class ChangeEvent:
     new: Row | None
     old: Row | None
     commit_time: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class Commit:
+    """
+    Transaction boundary is located in the commit message. Thus, decoder has to be able
+    to emit Commit event as well.
+
+    waltz confirms progess per transaction, not per row: only after a whole transaction
+    is durable handled may we tell PG it can release WAL.
+    end_lsn points just past this transaction; that is the LSN we report as flushed.
+    """
+
+    end_lsn: int
+    commit_time: datetime | None
+
+
+
