@@ -5,7 +5,7 @@ import httpx
 import pytest
 
 from waltz.events import ChangeEvent, Sentinel
-from waltz.sink import HttpSink, StdoutSink
+from waltz.sink import HttpSink, StdoutSink, build_sink
 
 
 def _event(**over):
@@ -104,3 +104,18 @@ def test_http_sink_retains_buffer_on_error():
         with pytest.raises(httpx.HTTPStatusError):
             sink.flush()
     assert len(sink._buffer) == 1
+
+
+# ── build_sink factory ────────────────────────────────────────────────────────
+
+def test_build_sink_stdout_returns_stdout_sink():
+    assert isinstance(build_sink("stdout", None), StdoutSink)
+
+
+def test_build_sink_http_returns_http_sink():
+    assert isinstance(build_sink("http", "http://localhost/events"), HttpSink)
+
+
+def test_build_sink_http_without_url_raises():
+    with pytest.raises(RuntimeError, match="sink.url"):
+        build_sink("http", None)

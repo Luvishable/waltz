@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Any
 
+import yaml
 from dotenv import load_dotenv
 from psycopg.conninfo import make_conninfo
 
@@ -43,6 +45,29 @@ class StreamConfig:
             checkpoint_path=os.getenv("WALTZ_CHECKPOINT", "waltz.lsn"),
             sink_type=os.getenv("WALTZ_SINK_TYPE", "stdout"),
             sink_url=os.getenv("WALTZ_SINK_URL"),
+        )
+
+    @classmethod
+    def from_yaml(cls, path: str) -> StreamConfig:
+        with open(path) as f:
+            raw: Any = yaml.safe_load(f)
+        src: Any = raw.get("source", {})
+        snk: Any = raw.get("sink", {})
+        ckpt: Any = raw.get("checkpoint", {})
+        for key in ("port", "user", "password", "database"):
+            if key not in src:
+                raise RuntimeError(f"missing required YAML key: source.{key}")
+        return cls(
+            host=str(src.get("host", "localhost")),
+            port=int(src["port"]),
+            user=str(src["user"]),
+            password=str(src["password"]),
+            dbname=str(src["database"]),
+            slot=str(src.get("slot", "waltz_slot_pgo")),
+            publication=str(src.get("publication", "waltz_pub")),
+            checkpoint_path=str(ckpt.get("path", "waltz.lsn")),
+            sink_type=str(snk.get("type", "stdout")),
+            sink_url=str(snk["url"]) if snk.get("url") else None,
         )
 
     def conninfo(self) -> str:

@@ -1,3 +1,5 @@
+import textwrap
+
 import pytest
 
 import waltz.config as config_mod
@@ -66,3 +68,60 @@ def test_conninfo_contains_replication_mode(monkeypatch, no_dotenv):
     info = StreamConfig.from_env().conninfo()
     assert "replication=database" in info
     assert "dbname=mydb" in info
+
+
+# ── from_yaml ─────────────────────────────────────────────────────────────────
+
+def test_from_yaml_reads_all_fields(tmp_path):
+    cfg_file = tmp_path / "waltz.yaml"
+    cfg_file.write_text(textwrap.dedent("""\
+        source:
+          host: db.internal
+          port: 5432
+          user: waltz
+          password: secret
+          database: mydb
+          slot: my_slot
+          publication: my_pub
+        sink:
+          type: http
+          url: http://localhost:8080/events
+        checkpoint:
+          path: /tmp/waltz.lsn
+    """))
+    assert StreamConfig.from_yaml(str(cfg_file)) == StreamConfig(
+        host="db.internal", port=5432, user="waltz", password="secret",
+        dbname="mydb", slot="my_slot", publication="my_pub",
+        checkpoint_path="/tmp/waltz.lsn",
+        sink_type="http", sink_url="http://localhost:8080/events",
+    )
+
+
+def test_from_yaml_applies_defaults(tmp_path):
+    cfg_file = tmp_path / "waltz.yaml"
+    cfg_file.write_text(textwrap.dedent("""\
+        source:
+          port: 5432
+          user: waltz
+          password: secret
+          database: mydb
+    """))
+    cfg = StreamConfig.from_yaml(str(cfg_file))
+    assert cfg.host == "localhost"
+    assert cfg.slot == "waltz_slot_pgo"
+    assert cfg.publication == "waltz_pub"
+    assert cfg.checkpoint_path == "waltz.lsn"
+    assert cfg.sink_type == "stdout"
+    assert cfg.sink_url is None
+
+
+def test_from_yaml_missing_required_key_raises(tmp_path):
+    cfg_file = tmp_path / "waltz.yaml"
+    cfg_file.write_text(textwrap.dedent("""\
+        source:
+          port: 5432
+          user: waltz
+          database: mydb
+    """))
+    with pytest.raises(RuntimeError, match="source.password"):
+        StreamConfig.from_yaml(str(cfg_file))

@@ -68,6 +68,14 @@ class HttpSink:
         self._buffer.clear()
 
 
+def build_sink(sink_type: str, sink_url: str | None) -> Sink:
+    if sink_type == "http":
+        if not sink_url:
+            raise RuntimeError("sink.url is required when sink.type = http")
+        return HttpSink(sink_url)
+    return StdoutSink()
+
+
 def _to_jsonable(event: ChangeEvent) -> dict[str, object]:
     # ChangeEvent holds types that JSON can't render directly: an int LSN we prefer
     # to show in PG's own hi/lo hex (matches the checkpoint file), a datetime and Rows
