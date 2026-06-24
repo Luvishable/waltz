@@ -16,6 +16,7 @@ feedback, so a crash can only replay events, never lose them (at-least once prin
 
 import psycopg
 from psycopg import pq
+import time
 
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig
@@ -25,6 +26,10 @@ from waltz.feedback import build_standby_status_update
 from waltz.frames import parse_keepalive, parse_xlogdata
 from waltz.lsn import format_lsn
 from waltz.sink import Sink
+
+
+_INITIAL_BACKOFF = 1.0
+_MAX_BACKOFF = 30.0
 
 
 class StreamManager:
@@ -48,12 +53,30 @@ class StreamManager:
 
     def run(self) -> None:
         """
-        Open the connection, start replication, and loop until stopped.
+        Retry loop: connect, stream, reconnect on failure with exponential backoff.
+        """
+        backoff = _INITIAL_BACKOFF
+        while True:
+            try:
+                self._connect_and_stream()
+                backoff = _INITIAL_BACKOFF
+            except KeyboardInterrupt:
+                print("\nStopped by user")
+                break
+            except Exception as e:
+                print(f"Stream error: {e}. Reconnecting in {backoff:.0f}s...")
+                time.sleep(backoff)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
+            self._decoder.clear()
+
+    def _connect_and_stream(self) -> None:
+        """
+        Open one connection, start replication, consume until it stops or fails.
         """
         conn = psycopg.connect(self._config.conninfo(), autocommit=True)
         with conn:
-            # replication streaming is a low-level job; the raw libpq connection
-            # (pgconn) underneath psycopg is what speaks COPY_BOTH
+            # replication streaming is a low-level job requires raw libpq connection
+            # underneath psycopg is what speaks COPY_BOTH
             self._pgconn = conn.pgconn
             if not self._start_replication():
                 return
@@ -86,31 +109,28 @@ class StreamManager:
 
     def _consume(self) -> None:
         assert self._pgconn is not None
-        try:
-            while True:
-                # 0 blocks and returns exactly one complete frame, so we never
-                # see a half frame or have to reassemble buffers ourselves
-                nbytes, data = self._pgconn.get_copy_data(0)
-                if nbytes == -1:
-                    print("Stream ended")
-                    break
-                if nbytes == -2:
-                    print(f"Stream error: {self._pgconn.error_message.decode()}")
-                    break
+        while True:
+            # 0 blocks and returns exactly one complete frame, so we never
+            # see a half frame or have to reassemble buffers ourselves
+            nbytes, data = self._pgconn.get_copy_data(0)
+            if nbytes == -1:
+                print("Stream ended")
+                break
+            if nbytes == -2:
+                print(f"Stream error: {self._pgconn.error_message.decode()}")
+                break
 
-                # Copy the memoryview into immutable bytes so the frame is independent
-                # of libpq's internal buffer and safe to slice
-                frame = bytes(data)
-                tag = chr(frame[0])
+            # Copy the memoryview into immutable bytes so the frame is independent
+            # of libpq's internal buffer and safe to slice
+            frame = bytes(data)
+            tag = chr(frame[0])
 
-                if tag == "w":
-                    self._handle_xlogdata(frame)
-                elif tag == "k":
-                    self._handle_keepalive(frame)
-                else:
-                    print(f"Unknown frame {tag!r}: {frame.hex()}")
-        except KeyboardInterrupt:
-            print("\nStopped by user")
+            if tag == "w":
+                self._handle_xlogdata(frame)
+            elif tag == "k":
+                self._handle_keepalive(frame)
+            else:
+                print(f"Unknown frame {tag!r}: {frame.hex()}")
 
     # --------------------- FRAME HANDLERS ----------------------
 
