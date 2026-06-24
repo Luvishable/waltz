@@ -123,5 +123,5 @@ def test_from_yaml_missing_required_key_raises(tmp_path):
           user: waltz
           database: mydb
     """))
-    with pytest.raises(RuntimeError, match="source.password"):
+    with pytest.raises(RuntimeError, match=r"source\.password"):
         StreamConfig.from_yaml(str(cfg_file))

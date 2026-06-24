@@ -117,5 +117,5 @@ def test_build_sink_http_returns_http_sink():
 
 
 def test_build_sink_http_without_url_raises():
-    with pytest.raises(RuntimeError, match="sink.url"):
+    with pytest.raises(RuntimeError, match=r"sink\.url"):
         build_sink("http", None)
