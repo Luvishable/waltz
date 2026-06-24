@@ -185,9 +185,11 @@ def test_run_clears_decoder_on_reconnect():
             raise psycopg.OperationalError("connection refused")
         raise KeyboardInterrupt
 
-    with patch.object(manager, "_connect_and_stream", fake_connect):
-        with patch("waltz.stream.time.sleep"):
-            manager.run()
+    with (
+        patch.object(manager, "_connect_and_stream", fake_connect),
+        patch("waltz.stream.time.sleep"),
+    ):
+        manager.run()
 
     assert decoder.clear_count >= 1
 
@@ -205,9 +207,11 @@ def test_run_backoff_doubles_on_repeated_failure():
             raise KeyboardInterrupt
         raise psycopg.OperationalError("down")
 
-    with patch.object(manager, "_connect_and_stream", fake_connect):
-        with patch("waltz.stream.time.sleep", side_effect=lambda s: sleep_calls.append(s)):
-            manager.run()
+    with (
+        patch.object(manager, "_connect_and_stream", fake_connect),
+        patch("waltz.stream.time.sleep", side_effect=lambda s: sleep_calls.append(s)),
+    ):
+        manager.run()
 
     assert len(sleep_calls) == 2
     assert sleep_calls[1] == sleep_calls[0] * 2

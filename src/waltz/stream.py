@@ -14,9 +14,10 @@ Being correct means for stream manager: process durably (checkpoint) before send
 feedback, so a crash can only replay events, never lose them (at-least once principal)
 """
 
+import time
+
 import psycopg
 from psycopg import pq
-import time
 
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig
@@ -26,7 +27,6 @@ from waltz.feedback import build_standby_status_update
 from waltz.frames import parse_keepalive, parse_xlogdata
 from waltz.lsn import format_lsn
 from waltz.sink import Sink
-
 
 _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 30.0
