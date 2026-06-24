@@ -58,6 +58,7 @@ class Decoder:
         self._commit_time: datetime | None = None
         self._final_lsn: int | None = None
         self._xid: int | None = None
+        self._tx_seq: int = 0
 
     def feed(self, payload: bytes) -> ChangeEvent | Commit | None:
         """One pgoutput message in. A ChangeEvent for I/U/D and None for structural ones."""
@@ -99,6 +100,7 @@ class Decoder:
         self._commit_time = None
         self._final_lsn = None
         self._xid = None
+        self._tx_seq = 0
 
     def _require_relation(self, oid: int, op: Op) -> RelationInfo:
         # Row change messages only contain a relation OID. The schema must have been
@@ -115,6 +117,8 @@ class Decoder:
         # This is the single place where we enforce that a BEGIN must have been seen
         if self._final_lsn is None:
             raise RuntimeError(f"{op} outside a transaction: no BEGIN seen")
+        key = self._make_idempotency_key(relation, self._final_lsn, self._tx_seq, new, old)
+        self._tx_seq += 1
         return ChangeEvent(
             lsn=self._final_lsn,
             schema=relation.namespace,
@@ -123,6 +127,7 @@ class Decoder:
             new=new,
             old=old,
             commit_time=self._commit_time,
+            idempotency_key=key,
         )
 
     def _handle_begin(self, reader: Reader) -> None:
@@ -254,3 +259,21 @@ class Decoder:
             values[column.name] = value
 
         return values
+
+    @staticmethod
+    def _make_idempotency_key(
+            relation: RelationInfo,
+            lsn: int,
+            tx_seq: int,
+            new: Row | None,
+            old: Row | None
+    ) -> str:
+        row = new if new is not None else old
+        key_col_names = [col.name for col in relation.columns if col.is_key]
+        if row and key_col_names:
+            pk = ":".join(str(row.get(k)) for k in key_col_names)
+        else:
+            pk = "unknown"
+        return f"{relation.namespace}.{relation.name}:{pk}:{lsn}:{tx_seq}"
+
+

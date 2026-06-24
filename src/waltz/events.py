@@ -41,6 +41,7 @@ class ChangeEvent:
     new: Row | None
     old: Row | None
     commit_time: datetime | None
+    idempotency_key: str
 
 
 @dataclass(frozen=True, slots=True)
