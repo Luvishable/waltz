@@ -15,6 +15,8 @@ import json
 import sys
 from typing import Protocol
 
+import httpx
+
 from waltz.events import ChangeEvent, Row, Sentinel
 from waltz.lsn import format_lsn
 
@@ -47,10 +49,30 @@ class StdoutSink:
         sys.stdout.flush()
 
 
+class HttpSink:
+
+    def __init__(self, url: str, timeout: float = 10.0) -> None:
+        self._url = url
+        self._timeout = timeout
+        self._buffer: list[ChangeEvent] = []
+
+    def write(self, event: ChangeEvent) -> None:
+        self._buffer.append(event)
+
+    def flush(self) -> None:
+        if not self._buffer:
+            return
+        payload = [_to_jsonable(e) for e in self._buffer]
+        response = httpx.post(self._url, json=payload, timeout=self._timeout)
+        response.raise_for_status()
+        self._buffer.clear()
+
+
 def _to_jsonable(event: ChangeEvent) -> dict[str, object]:
     # ChangeEvent holds types that JSON can't render directly: an int LSN we prefer
     # to show in PG's own hi/lo hex (matches the checkpoint file), a datetime and Rows
     return {
+        "idempotency_key": event.idempotency_key,
         "lsn": format_lsn(event.lsn),
         "schema": event.schema,
         "table": event.table,

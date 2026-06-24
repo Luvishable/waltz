@@ -18,7 +18,8 @@ def _keepalive(*, wal_end, reply_requested):
 
 def _event(lsn):
     return ChangeEvent(lsn=lsn, schema="public", table="t", op="INSERT",
-                       new={"id": "1"}, old=None, commit_time=None)
+                       new={"id": "1"}, old=None, commit_time=None,
+                       idempotency_key=f"public.t:1:{lsn}:0")
 
 
 def _commit(end_lsn):
@@ -76,7 +77,8 @@ def _manager(decoder_results, *, initial_lsn=None):
     log = []
     decoder = FakeDecoder(decoder_results)
     config = StreamConfig(host="h", port=1, user="u", password="p", dbname="d",
-                          slot="s", publication="pub", checkpoint_path="x")
+                          slot="s", publication="pub", checkpoint_path="x",
+                          sink_type="stdout", sink_url=None)
     manager = StreamManager(config, FakeCheckpoint(log, initial=initial_lsn),
                             decoder, FakeSink(log))
     manager._pgconn = FakePgConn(log)

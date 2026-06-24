@@ -27,18 +27,31 @@ def test_from_env_reads_all_fields(monkeypatch, no_dotenv):
         host="db.internal", port=5432, user="waltz", password="secret",
         dbname="mydb", slot="my_slot", publication="my_pub",
         checkpoint_path="/tmp/x.lsn",
+        sink_type="stdout", sink_url=None,
     )
 
 
 def test_from_env_applies_defaults(monkeypatch, no_dotenv):
     _set_required(monkeypatch)
-    for var in ("DB_HOST", "WALTZ_SLOT", "WALTZ_PUBLICATION", "WALTZ_CHECKPOINT"):
+    for var in ("DB_HOST", "WALTZ_SLOT", "WALTZ_PUBLICATION", "WALTZ_CHECKPOINT",
+                "WALTZ_SINK_TYPE", "WALTZ_SINK_URL"):
         monkeypatch.delenv(var, raising=False)
     cfg = StreamConfig.from_env()
     assert cfg.host == "localhost"
     assert cfg.slot == "waltz_slot_pgo"
     assert cfg.publication == "waltz_pub"
     assert cfg.checkpoint_path == "waltz.lsn"
+    assert cfg.sink_type == "stdout"
+    assert cfg.sink_url is None
+
+
+def test_from_env_reads_http_sink_config(monkeypatch, no_dotenv):
+    _set_required(monkeypatch)
+    monkeypatch.setenv("WALTZ_SINK_TYPE", "http")
+    monkeypatch.setenv("WALTZ_SINK_URL", "http://localhost:8080/events")
+    cfg = StreamConfig.from_env()
+    assert cfg.sink_type == "http"
+    assert cfg.sink_url == "http://localhost:8080/events"
 
 
 def test_missing_required_var_raises(monkeypatch, no_dotenv):

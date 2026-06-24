@@ -25,6 +25,8 @@ class StreamConfig:
     slot: str
     publication: str
     checkpoint_path: str
+    sink_type: str
+    sink_url: str | None
 
     @classmethod
     def from_env(cls) -> StreamConfig:
@@ -39,6 +41,8 @@ class StreamConfig:
             slot=os.getenv("WALTZ_SLOT", "waltz_slot_pgo"),
             publication=os.getenv("WALTZ_PUBLICATION", "waltz_pub"),
             checkpoint_path=os.getenv("WALTZ_CHECKPOINT", "waltz.lsn"),
+            sink_type=os.getenv("WALTZ_SINK_TYPE", "stdout"),
+            sink_url=os.getenv("WALTZ_SINK_URL"),
         )
 
     def conninfo(self) -> str:

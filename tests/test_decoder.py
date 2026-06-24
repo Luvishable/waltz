@@ -92,6 +92,7 @@ def test_insert_emits_change_event_with_lsn_and_time():
     assert event == ChangeEvent(
         lsn=0x16B3748, schema="public", table="employees", op="INSERT",
         new={"id": "1", "name": "Ali"}, old=None, commit_time=COMMIT_TIME,
+        idempotency_key=f"public.employees:1:{0x16B3748}:0",
     )
 
 
@@ -226,3 +227,37 @@ def test_clear_drops_state():
     assert dict(d.relations) == {}
     with pytest.raises(KeyError):
         d.feed(insert(oid=OID, values=[("t", "1"), ("t", "Ali")]))
+
+
+def test_idempotency_key_has_correct_format():
+    d = Decoder()
+    d.feed(_emp_relation())
+    d.feed(begin(final_lsn=0x100))
+    event = d.feed(insert(oid=OID, values=[("t", "42"), ("t", "Ali")]))
+    assert event.idempotency_key == f"public.employees:42:{0x100}:0"
+
+
+def test_tx_seq_increments_within_transaction():
+    # Two events in the same transaction must get distinct keys even though they
+    # share the same commit LSN. The tx_seq suffix guarantees uniqueness.
+    d = Decoder()
+    d.feed(_emp_relation())
+    d.feed(begin(final_lsn=1))
+    ev1 = d.feed(insert(oid=OID, values=[("t", "1"), ("t", "A")]))
+    ev2 = d.feed(insert(oid=OID, values=[("t", "2"), ("t", "B")]))
+    assert ev1.idempotency_key.endswith(":0")
+    assert ev2.idempotency_key.endswith(":1")
+
+
+def test_tx_seq_resets_after_commit():
+    # The counter must start from 0 again in the next transaction so that
+    # a replayed transaction produces identical keys (deterministic idempotency).
+    d = Decoder()
+    d.feed(_emp_relation())
+    d.feed(begin(final_lsn=1))
+    ev1 = d.feed(insert(oid=OID, values=[("t", "1"), ("t", "A")]))
+    d.feed(commit(commit_lsn=1, end_lsn=2))
+    d.feed(begin(final_lsn=3))
+    ev2 = d.feed(insert(oid=OID, values=[("t", "2"), ("t", "B")]))
+    assert ev1.idempotency_key.endswith(":0")
+    assert ev2.idempotency_key.endswith(":0")
