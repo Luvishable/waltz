@@ -10,8 +10,8 @@ import asyncio
 import signal
 
 import psycopg
-from psycopg import pq
 import structlog
+from psycopg import pq
 
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig

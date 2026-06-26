@@ -1,7 +1,7 @@
 import argparse
 import asyncio
-import sys
 import logging
+import sys
 
 import structlog
 
