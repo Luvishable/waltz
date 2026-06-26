@@ -11,6 +11,7 @@ import signal
 
 import psycopg
 from psycopg import pq
+import structlog
 
 from waltz.checkpoint import Checkpoint
 from waltz.config import StreamConfig
@@ -20,6 +21,8 @@ from waltz.feedback import build_standby_status_update
 from waltz.frames import parse_keepalive, parse_xlogdata
 from waltz.lsn import format_lsn
 from waltz.sink import Sink
+
+logger = structlog.get_logger()
 
 _INITIAL_BACKOFF = 1.0
 _MAX_BACKOFF = 30.0
@@ -45,6 +48,11 @@ class StreamManager:
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
         loop.add_signal_handler(signal.SIGTERM, self._request_stop)
+        structlog.contextvars.clear_contextvars()
+        structlog.contextvars.bind_contextvars(
+            slot=self._config.slot,
+            publication=self._config.publication,
+        )
 
         backoff = _INITIAL_BACKOFF
         while not self._stop:
@@ -54,7 +62,7 @@ class StreamManager:
             except KeyboardInterrupt:
                 break
             except Exception as e:
-                print(f"Stream error: {e}. Reconnecting in {backoff:.0f}s...")
+                logger.warning("stream.reconnecting", error=str(e), backoff=round(backoff))
                 await asyncio.sleep(backoff)
                 backoff = min(backoff*2, _MAX_BACKOFF)
             self._decoder.clear()
@@ -77,7 +85,7 @@ class StreamManager:
         resume_lsn = self._checkpoint.read()
         self._last_lsn = resume_lsn or 0
         start_at = format_lsn(resume_lsn) if resume_lsn is not None else "0/0"
-        print(f"Resuming from {start_at}")
+        logger.info("stream.resuming", lsn=start_at)
 
         start_cmd = (
             f"START REPLICATION SLOT {self._config.slot} LOGICAL {start_at}"
@@ -86,10 +94,10 @@ class StreamManager:
 
         res = self._pgconn.exec_(start_cmd)
         if res.status != pq.ExecStatus.COPY_BOTH:
-            print(f"Stream did not start: {self._pgconn.error_message.decode()}")
+            logger.error("stream.start_failed", error=self._pgconn.error_message.decode())
             return False
 
-        print("Stream started (CTRL + C to stop)\n")
+        logger.info("stream.started")
         return True
 
     async def _consume(self) -> None:
@@ -101,10 +109,10 @@ class StreamManager:
             n_bytes, data = self._pgconn.get_copy_data(1)    # 1 = non-blocking
 
             if n_bytes == -1:
-                print("Stream ended")
+                logger.info("stream.ended")
                 break
             if n_bytes == -2:
-                print(f"Stream error: {self._pgconn.error_message.decode()}")
+                logger.error("stream.copy_error", error=self._pgconn.error_message.decode())
                 break
             if n_bytes == 0:
                 # No data yet. Register a reader so that the event loop wakes us when
@@ -130,7 +138,7 @@ class StreamManager:
             elif tag == "k":
                 self._handle_keepalive(frame)
             else:
-                print(f"Unknown frame {tag!r}: {frame.hex()}")
+                logger.warning("stream.unknown_frame", tag=tag, hex=frame.hex())
 
     async def _handle_xlogdata(self, frame: bytes) -> None:
         xlog = parse_xlogdata(frame)
