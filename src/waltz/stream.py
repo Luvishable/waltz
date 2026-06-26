@@ -1,20 +1,13 @@
 """
-Stream manager: the heart of waltz.
-
-- Connects to PG in replication mode
+- Connects to PG in replication mode via psycopg3 AsyncConnection
 - Starts logical replication on our slot
-- Read raw COPY_BOTH frames
+- Reads frames via non-blocking get_copy_data + asyncio socket waiting
 - Feeds pgoutput payloads to the decoder
-- and drives the LSN feedback loop.
-
-It ties the pure pieces (frames, decoder, feedback, config) to the one stateful,
-I/O-bound job: keep the stream alive and confirm progress only after it is durable.
-
-Being correct means for stream manager: process durably (checkpoint) before sending
-feedback, so a crash can only replay events, never lose them (at-least once principal)
+- Drives the LSN feedback loop
 """
 
-import time
+import asyncio
+import signal
 
 import psycopg
 from psycopg import pq
@@ -33,16 +26,13 @@ _MAX_BACKOFF = 30.0
 
 
 class StreamManager:
-    """
-    connect, read, decode, confirm
-    """
 
     def __init__(
-        self,
-        config: StreamConfig,
-        checkpoint: Checkpoint,
-        decoder: Decoder,
-        sink: Sink,
+            self,
+            config: StreamConfig,
+            checkpoint:Checkpoint,
+            decoder: Decoder,
+            sink: Sink,
     ) -> None:
         self._config = config
         self._checkpoint = checkpoint
@@ -50,49 +40,47 @@ class StreamManager:
         self._sink = sink
         self._pgconn: pq.abc.PGconn | None = None
         self._last_lsn = 0
+        self._stop = False
 
-    def run(self) -> None:
-        """
-        Retry loop: connect, stream, reconnect on failure with exponential backoff.
-        """
+    async def run(self) -> None:
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGTERM, self._request_stop)
+
         backoff = _INITIAL_BACKOFF
-        while True:
+        while not self._stop:
             try:
-                self._connect_and_stream()
+                await self._connect_and_stream()
                 backoff = _INITIAL_BACKOFF
             except KeyboardInterrupt:
-                print("\nStopped by user")
                 break
             except Exception as e:
                 print(f"Stream error: {e}. Reconnecting in {backoff:.0f}s...")
-                time.sleep(backoff)
-                backoff = min(backoff * 2, _MAX_BACKOFF)
+                await asyncio.sleep(backoff)
+                backoff = min(backoff*2, _MAX_BACKOFF)
             self._decoder.clear()
 
-    def _connect_and_stream(self) -> None:
-        """
-        Open one connection, start replication, consume until it stops or fails.
-        """
-        conn = psycopg.connect(self._config.conninfo(), autocommit=True)
-        with conn:
-            # replication streaming is a low-level job requires raw libpq connection
-            # underneath psycopg is what speaks COPY_BOTH
+    def _request_stop(self) -> None:
+        self._stop = True
+
+    async def _connect_and_stream(self) -> None:
+        conn = await psycopg.AsyncConnection.connect(
+            self._config.conninfo(), autocommit=True
+        )
+        async with conn:
             self._pgconn = conn.pgconn
             if not self._start_replication():
                 return
-            self._consume()
+            await self._consume()
 
     def _start_replication(self) -> bool:
         assert self._pgconn is not None
-        # Resume from our durable record. If it is None in the first run, then
-        # start at 0/0, which means "use the slot's own confirmed position"
         resume_lsn = self._checkpoint.read()
         self._last_lsn = resume_lsn or 0
         start_at = format_lsn(resume_lsn) if resume_lsn is not None else "0/0"
         print(f"Resuming from {start_at}")
 
         start_cmd = (
-            f"START_REPLICATION SLOT {self._config.slot} LOGICAL {start_at} "
+            f"START REPLICATION SLOT {self._config.slot} LOGICAL {start_at}"
             f"(proto_version '1', publication_names '{self._config.publication}')"
         ).encode()
 
@@ -101,75 +89,106 @@ class StreamManager:
             print(f"Stream did not start: {self._pgconn.error_message.decode()}")
             return False
 
-        # COPY_BOTH is two-way flow: server sends WAL rows, we send feedback
-        print("Stream started (CTRL + C to stop.\n")
+        print("Stream started (CTRL + C to stop)\n")
         return True
 
-    # -------------------------- MAIN LOOP --------------------------
-
-    def _consume(self) -> None:
+    async def _consume(self) -> None:
         assert self._pgconn is not None
-        while True:
-            # 0 blocks and returns exactly one complete frame, so we never
-            # see a half frame or have to reassemble buffers ourselves
-            nbytes, data = self._pgconn.get_copy_data(0)
-            if nbytes == -1:
+        loop = asyncio.get_running_loop()
+        fd = self._pgconn.socket
+
+        while not self._stop:
+            n_bytes, data = self._pgconn.get_copy_data(1)    # 1 = non-blocking
+
+            if n_bytes == -1:
                 print("Stream ended")
                 break
-            if nbytes == -2:
+            if n_bytes == -2:
                 print(f"Stream error: {self._pgconn.error_message.decode()}")
                 break
+            if n_bytes == 0:
+                # No data yet. Register a reader so that the event loop wakes us when
+                # the socket becomes readable.
+                readable = asyncio.Event()
+                # call readable.set when the socket becomes readable that is, when
+                # PG sends data
+                loop.add_reader(fd, readable.set)
 
-            # Copy the memoryview into immutable bytes so the frame is independent
-            # of libpq's internal buffer and safe to slice
+                try:
+                    await asyncio.wait_for(readable.wait(), timeout=1.0)
+                except TimeoutError:
+                    pass
+                finally:
+                    loop.remove_reader(fd)
+                continue
+
             frame = bytes(data)
             tag = chr(frame[0])
 
             if tag == "w":
-                self._handle_xlogdata(frame)
+                await self._handle_xlogdata(frame)
             elif tag == "k":
                 self._handle_keepalive(frame)
             else:
                 print(f"Unknown frame {tag!r}: {frame.hex()}")
 
-    # --------------------- FRAME HANDLERS ----------------------
-
-    def _handle_xlogdata(self, frame: bytes) -> None:
+    async def _handle_xlogdata(self, frame: bytes) -> None:
         xlog = parse_xlogdata(frame)
         result = self._decoder.feed(xlog.payload)
 
         if isinstance(result, ChangeEvent):
-            # Hand the row to the sink, but do NOT confirm progress yet: the
-            # transaction isn't finished; so it is not safe to advance the slot past it
-            self._sink.write(result)
+            await self._sink.write(result)
         elif isinstance(result, Commit):
-            # Transaction boundary: make every buffered wo durable, only then confirm up
-            # to the transaction's end so PG may release WAL.
-            self._sink.flush()
+            await self._sink.flush()
             if result.end_lsn > self._last_lsn:
                 self._last_lsn = result.end_lsn
                 self._send_feedback(self._last_lsn)
-        # else: structural message (Begin/Relation) -> feed() returned None; nothing to do.
 
     def _handle_keepalive(self, frame: bytes) -> None:
         keepalive = parse_keepalive(frame)
-        # walEnd is a safe point: nothing below it is for us
         self._last_lsn = max(self._last_lsn, keepalive.wal_end)
-        # Reply when asked so wal_sender_timeout won't drop us; this also lets slot
-        # advance over WAL that isn't ours.
         if keepalive.reply_requested:
             self._send_feedback(self._last_lsn)
 
-    # ---------------------- OUTPUT & FEEDBACK ----------------------
-
     def _send_feedback(self, lsn: int) -> None:
         assert self._pgconn is not None
-        # 1) make it durable on our side first (the checkpoint file is fsync'd)
+        # Checkpoint first: durable on our side before telling PG ro release WAL
         self._checkpoint.write(lsn)
-        # 2) only after that, tell PG it may release WAL up to here
         msg = build_standby_status_update(write_lsn=lsn, flush_lsn=lsn, apply_lsn=lsn)
-        # 3) queue the standby status update onto the COPY stream
+        # put the data into the output buffer of libpq
         self._pgconn.put_copy_data(msg)
-        # flush pushes our buffered message onto the socket
+        # empty the buffer and send them via socket
         self._pgconn.flush()
-        print(f"    -> feedback flush={format_lsn(lsn)}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

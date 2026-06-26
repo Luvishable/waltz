@@ -15,24 +15,15 @@ import json
 import sys
 from typing import Protocol
 
-import httpx
+import aiohttp
 
 from waltz.events import ChangeEvent, Row, Sentinel
 from waltz.lsn import format_lsn
 
 
 class Sink(Protocol):
-    def write(self, event: ChangeEvent) -> None:
-        """
-        Hand one event to the sink.
-        """
-        ...
-
-    def flush(self) -> None:
-        """
-        Make everything written so fardurable. Must raise on failure.
-        """
-        ...
+    async def write(self, event: ChangeEvent) -> None: ...
+    async def flush(self) -> None: ...
 
 
 class StdoutSink:
@@ -42,31 +33,35 @@ class StdoutSink:
     Not a durable target though; it exists to display the flow.
     """
 
-    def write(self, event: ChangeEvent) -> None:
+    async def write(self, event: ChangeEvent) -> None:
         sys.stdout.write(json.dumps(_to_jsonable(event)) + "\n")
 
-    def flush(self) -> None:
+    async def flush(self) -> None:
         sys.stdout.flush()
 
 
 class HttpSink:
 
-    def __init__(self, url: str, timeout: float = 10.0) -> None:
+    def __init__(
+            self,
+            url: str,
+            timeout: float = 10.0
+    ) -> None:
         self._url = url
-        self._timeout = timeout
+        self._timeout = aiohttp.ClientTimeout(total=timeout)
         self._buffer: list[ChangeEvent] = []
 
-    def write(self, event: ChangeEvent) -> None:
+    async def write(self, event: ChangeEvent) -> None:
         self._buffer.append(event)
 
-    def flush(self) -> None:
+    async def flush(self) -> None:
         if not self._buffer:
             return
         payload = [_to_jsonable(e) for e in self._buffer]
-        response = httpx.post(self._url, json=payload, timeout=self._timeout)
-        response.raise_for_status()
+        async with aiohttp.ClientSession(timeout=self._timeout) as session:
+            resp = await session.post(self._url, json=payload)
+            resp.raise_for_status()
         self._buffer.clear()
-
 
 def build_sink(sink_type: str, sink_url: str | None) -> Sink:
     if sink_type == "http":

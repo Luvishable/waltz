@@ -10,7 +10,6 @@ from psycopg.conninfo import make_conninfo
 
 
 def _require_env(name: str) -> str:
-    # Fail fast with a clear message instead of letting a None reach psycopg.
     value = os.getenv(name)
     if value is None or value == "":
         raise RuntimeError(f"missing required environment variable: {name}")
@@ -71,8 +70,6 @@ class StreamConfig:
         )
 
     def conninfo(self) -> str:
-        # Build a psycopg-ready connection string. replication=database switches
-        # the connection into logical replication mode; it is fixed, not user config.
         return make_conninfo(
             host=self.host,
             port=self.port,
@@ -81,3 +78,5 @@ class StreamConfig:
             dbname=self.dbname,
             replication="database",
         )
+
+

@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import sys
 
 from waltz.checkpoint import FileCheckpoint
@@ -11,13 +12,14 @@ from waltz.stream import StreamManager
 def cmd_start(args: argparse.Namespace) -> None:
     config = StreamConfig.from_yaml(args.config) if args.config else StreamConfig.from_env()
     sink = build_sink(config.sink_type, config.sink_url)
-    StreamManager(
-        config,
-        FileCheckpoint(config.checkpoint_path),
-        Decoder(),
-        sink,
-    ).run()
-
+    asyncio.run(
+        StreamManager(
+            config,
+            FileCheckpoint(config.checkpoint_path),
+            Decoder(),
+            sink,
+        ).run()
+    )
 
 def main() -> None:
     parser = argparse.ArgumentParser(
