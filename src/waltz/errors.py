@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Never
+
 import psycopg
 import psycopg.errors as pg_errors
 
@@ -56,7 +58,7 @@ class PermanentSinkError(SinkError):
     """
 
 
-def raise_pg_error(exc: psycopg.Error) -> ReplicationError:
+def raise_pg_error(exc: psycopg.Error) -> Never:
     """Wrap a psycopg exception into the waltz hierarchy."""
     if isinstance(exc, (
         pg_errors.InsufficientPrivilege,

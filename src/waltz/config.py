@@ -57,7 +57,7 @@ class StreamConfig:
         ckpt: Any = raw.get("checkpoint", {})
         for key in ("port", "user", "password", "database"):
             if key not in src:
-                ConfigError(f"missing required YAML key: source.{key}")
+                raise ConfigError(f"missing required YAML key: source.{key}")
         return cls(
             host=str(src.get("host", "localhost")),
             port=int(src["port"]),
@@ -79,6 +79,15 @@ class StreamConfig:
             password=self.password,
             dbname=self.dbname,
             replication="database",
+        )
+
+    def admin_conninfo(self) -> str:
+        return make_conninfo(
+            host=self.host,
+            port=self.port,
+            user=self.user,
+            password=self.password,
+            dbname=self.dbname,
         )
 
 
