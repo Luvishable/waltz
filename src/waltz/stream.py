@@ -8,6 +8,7 @@
 
 import asyncio
 import signal
+import random
 
 import psycopg
 import structlog
@@ -21,6 +22,12 @@ from waltz.feedback import build_standby_status_update
 from waltz.frames import parse_keepalive, parse_xlogdata
 from waltz.lsn import format_lsn
 from waltz.sink import Sink
+from waltz.errors import (
+    PermanentReplicationError,
+    TransientReplicationError,
+    TransientSinkError,
+    raise_pg_error,
+)
 
 logger = structlog.get_logger()
 
@@ -61,23 +68,28 @@ class StreamManager:
                 backoff = _INITIAL_BACKOFF
             except KeyboardInterrupt:
                 break
-            except Exception as e:
-                logger.warning("stream.reconnecting", error=str(e), backoff=round(backoff))
-                await asyncio.sleep(backoff)
-                backoff = min(backoff*2, _MAX_BACKOFF)
+            except PermanentReplicationError:
+                raise
+            except (TransientReplicationError, TransientSinkError) as e:
+                jitter = backoff * random.uniform(0, 0.1)
+                logger.warning("stream.reconnecting", error=str(e), backoff=round(backoff + jitter))
+                await asyncio.sleep(backoff + jitter)
+                backoff = min(backoff * 2, _MAX_BACKOFF)
             self._decoder.clear()
 
     def _request_stop(self) -> None:
         self._stop = True
 
     async def _connect_and_stream(self) -> None:
-        conn = await psycopg.AsyncConnection.connect(
-            self._config.conninfo(), autocommit=True
-        )
+        try:
+            conn = await psycopg.AsyncConnection.connect(
+                self._config.conninfo(), autocommit=True
+            )
+        except psycopg.Error as e:
+            raise_pg_error(e)
         async with conn:
             self._pgconn = conn.pgconn
-            if not self._start_replication():
-                return
+            self._start_replication()
             await self._consume()
 
     def _start_replication(self) -> bool:
@@ -94,9 +106,7 @@ class StreamManager:
 
         res = self._pgconn.exec_(start_cmd)
         if res.status != pq.ExecStatus.COPY_BOTH:
-            logger.error("stream.start_failed", error=self._pgconn.error_message.decode())
-            return False
-
+            raise PermanentReplicationError(self._pgconn.error_message.decode())
         logger.info("stream.started")
         return True
 
@@ -112,8 +122,7 @@ class StreamManager:
                 logger.info("stream.ended")
                 break
             if n_bytes == -2:
-                logger.error("stream.copy_error", error=self._pgconn.error_message.decode())
-                break
+                raise TransientReplicationError(self._pgconn.error_message.decode())
             if n_bytes == 0:
                 # No data yet. Register a reader so that the event loop wakes us when
                 # the socket becomes readable.

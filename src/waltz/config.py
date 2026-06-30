@@ -8,11 +8,13 @@ import yaml
 from dotenv import load_dotenv
 from psycopg.conninfo import make_conninfo
 
+from waltz.errors import ConfigError
+
 
 def _require_env(name: str) -> str:
     value = os.getenv(name)
     if value is None or value == "":
-        raise RuntimeError(f"missing required environment variable: {name}")
+        raise ConfigError(f"missing required env variable: {name}")
     return value
 
 
@@ -55,7 +57,7 @@ class StreamConfig:
         ckpt: Any = raw.get("checkpoint", {})
         for key in ("port", "user", "password", "database"):
             if key not in src:
-                raise RuntimeError(f"missing required YAML key: source.{key}")
+                ConfigError(f"missing required YAML key: source.{key}")
         return cls(
             host=str(src.get("host", "localhost")),
             port=int(src["port"]),
