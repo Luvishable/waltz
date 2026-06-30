@@ -29,9 +29,9 @@ def configure_logging() -> None:
 
 
 def cmd_start(args: argparse.Namespace) -> None:
-    config = StreamConfig.from_yaml(args.config) if args.config else StreamConfig.from_env()
-    sink = build_sink(config.sink_type, config.sink_url)
     try:
+        config = StreamConfig.from_yaml(args.config) if args.config else StreamConfig.from_env()
+        sink = build_sink(config.sink_type, config.sink_url)
         asyncio.run(
             StreamManager(
                 config,
