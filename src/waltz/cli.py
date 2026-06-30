@@ -10,6 +10,9 @@ from waltz.config import StreamConfig
 from waltz.decoder import Decoder
 from waltz.sink import build_sink
 from waltz.stream import StreamManager
+from waltz.errors import ConfigError, PermanentReplicationError
+
+logger = structlog.get_logger()
 
 
 def configure_logging() -> None:
@@ -28,14 +31,22 @@ def configure_logging() -> None:
 def cmd_start(args: argparse.Namespace) -> None:
     config = StreamConfig.from_yaml(args.config) if args.config else StreamConfig.from_env()
     sink = build_sink(config.sink_type, config.sink_url)
-    asyncio.run(
-        StreamManager(
-            config,
-            FileCheckpoint(config.checkpoint_path),
-            Decoder(),
-            sink,
-        ).run()
-    )
+    try:
+        asyncio.run(
+            StreamManager(
+                config,
+                FileCheckpoint(config.checkpoint_path),
+                Decoder(),
+                sink,
+            ).run()
+        )
+    except ConfigError as e:
+        logger.error("waltz.config_error", error=str(e))
+        sys.exit(1)
+    except PermanentReplicationError as e:
+        logger.error("waltz.permanent_error", error=str(e))
+        sys.exit(1)
+
 
 def main() -> None:
     parser = argparse.ArgumentParser(

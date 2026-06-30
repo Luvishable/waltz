@@ -92,7 +92,7 @@ class StreamManager:
             self._start_replication()
             await self._consume()
 
-    def _start_replication(self) -> bool:
+    def _start_replication(self) -> None:
         assert self._pgconn is not None
         resume_lsn = self._checkpoint.read()
         self._last_lsn = resume_lsn or 0
@@ -108,7 +108,6 @@ class StreamManager:
         if res.status != pq.ExecStatus.COPY_BOTH:
             raise PermanentReplicationError(self._pgconn.error_message.decode())
         logger.info("stream.started")
-        return True
 
     async def _consume(self) -> None:
         assert self._pgconn is not None
