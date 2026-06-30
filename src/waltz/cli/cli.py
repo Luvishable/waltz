@@ -9,9 +9,9 @@ import structlog
 
 from waltz.checkpoint import FileCheckpoint
 from waltz.config import StreamConfig
-from waltz.decoder import Decoder
+from waltz.core.decoder import Decoder
 from waltz.sink import build_sink
-from waltz.stream import StreamManager
+from waltz.replication.stream import StreamManager
 from waltz.errors import (
     ConfigError,
     PermanentReplicationError,

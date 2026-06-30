@@ -20,7 +20,7 @@ Why the server needs it:
 
 import struct
 
-from waltz.pgtime import now_micros
+from waltz.replication.pgtime import now_micros
 
 # Standby status update ('r'), client -> server. Big-endian (network byte order):
 #   Byte1  'r'              message tag

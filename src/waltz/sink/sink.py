@@ -17,8 +17,8 @@ from typing import Protocol
 
 import aiohttp
 
-from waltz.events import ChangeEvent, Row, Sentinel
-from waltz.lsn import format_lsn
+from waltz.core.events import ChangeEvent, Row, Sentinel
+from waltz.core.lsn import format_lsn
 from waltz.errors import ConfigError, PermanentSinkError, TransientSinkError
 
 

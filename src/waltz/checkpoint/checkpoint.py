@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from typing import Protocol
 
-from waltz.lsn import format_lsn, parse_lsn
+from waltz.core.lsn import format_lsn, parse_lsn
 
 
 class Checkpoint(Protocol):

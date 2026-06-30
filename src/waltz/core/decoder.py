@@ -15,9 +15,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
 
-from waltz.events import ChangeEvent, Commit, Op, Row, Sentinel
-from waltz.pgtime import micros_to_datetime
-from waltz.reader import Reader
+from waltz.core.events import ChangeEvent, Commit, Op, Row, Sentinel
+from waltz.replication.pgtime import micros_to_datetime
+from waltz.core.reader import Reader
 
 
 @dataclass(frozen=True, slots=True)
