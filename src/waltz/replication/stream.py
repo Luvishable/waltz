@@ -7,8 +7,8 @@
 """
 
 import asyncio
-import signal
 import random
+import signal
 
 import psycopg
 import structlog
@@ -18,16 +18,16 @@ from waltz.checkpoint.checkpoint import Checkpoint
 from waltz.config.config import StreamConfig
 from waltz.core.decoder import Decoder
 from waltz.core.events import ChangeEvent, Commit
-from waltz.replication.feedback import build_standby_status_update
-from waltz.replication.frames import parse_keepalive, parse_xlogdata
 from waltz.core.lsn import format_lsn
-from waltz.sink.sink import Sink
 from waltz.errors import (
     PermanentReplicationError,
     TransientReplicationError,
     TransientSinkError,
     raise_pg_error,
 )
+from waltz.replication.feedback import build_standby_status_update
+from waltz.replication.frames import parse_keepalive, parse_xlogdata
+from waltz.sink.sink import Sink
 
 logger = structlog.get_logger()
 

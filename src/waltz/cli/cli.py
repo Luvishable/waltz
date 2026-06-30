@@ -4,20 +4,20 @@ import logging
 import sys
 
 import psycopg
-from psycopg import sql
 import structlog
+from psycopg import sql
 
-from waltz.checkpoint import FileCheckpoint
-from waltz.config import StreamConfig
+from waltz.checkpoint.checkpoint import FileCheckpoint
+from waltz.config.config import StreamConfig
 from waltz.core.decoder import Decoder
-from waltz.sink import build_sink
-from waltz.replication.stream import StreamManager
 from waltz.errors import (
     ConfigError,
     PermanentReplicationError,
     TransientReplicationError,
-    raise_pg_error
+    raise_pg_error,
 )
+from waltz.replication.stream import StreamManager
+from waltz.sink.sink import build_sink
 
 logger = structlog.get_logger()
 

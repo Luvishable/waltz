@@ -5,8 +5,8 @@ from typing import Any
 
 import yaml
 from dotenv import load_dotenv
-from pydantic import BaseModel, ConfigDict, ValidationError
 from psycopg.conninfo import make_conninfo
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from waltz.errors import ConfigError
 

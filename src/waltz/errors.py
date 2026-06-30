@@ -14,7 +14,7 @@ class WaltzError(Exception):
 
 class ConfigError(WaltzError):
     """
-    Invalid or missiıng configuration; never retry.
+    Invalid or missing configuration; never retry.
     """
 
 
