@@ -60,7 +60,7 @@ async def _init_async(config: StreamConfig) -> None:
                 logger.info("init_publication_exists", name=config.publication)
 
             cursor = await conn.execute(
-                "SELECT 1 FROM pg_replication_slots(%s, 'pgoutput')",
+                "SELECT 1 FROM pg_replication_slots WHERE slot_name = %s AND plugin = 'pgoutput'",
                 (config.slot,),
             )
             if await cursor.fetchone() is None:
