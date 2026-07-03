@@ -3,7 +3,7 @@ import logging
 import structlog
 import typer
 
-from waltz.cli.commands import init, start
+from waltz.cli.commands import init, start, status
 
 app = typer.Typer(
     name="waltz",
@@ -15,6 +15,7 @@ app = typer.Typer(
 # Register each module's command function on the shared app.
 app.command(name="start")(start.start)
 app.command(name="init")(init.init)
+app.command(name="status")(status.status)
 
 
 def configure_logging() -> None:

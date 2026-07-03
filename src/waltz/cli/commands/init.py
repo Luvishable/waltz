@@ -19,8 +19,8 @@ logger = structlog.get_logger()
 async def _init(config: StreamConfig) -> None:
     async with admin_connection(config) as conn:
         created = await ensure_publication(conn, config.publication)
-        logger.info("init.publication_created" if created else "init.publication_exits",
-                    name=config.slot,
+        logger.info("init.publication_created" if created else "init.publication_exists",
+                    name=config.publication,
         )
         created = await ensure_slot(conn, config.slot)
         logger.info(
