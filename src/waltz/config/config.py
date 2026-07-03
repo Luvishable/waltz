@@ -67,6 +67,11 @@ class StreamConfig(BaseModel):
         except ValidationError as e:
             raise ConfigError(str(e)) from e
 
+    @classmethod
+    def load(cls, path: str | os.PathLike[str] | None) -> StreamConfig:
+        # pick the source by presence of a path, so every command shares one rule
+        return cls.from_yaml(str(path)) if path else cls.from_env()
+
     def conninfo(self) -> str:
         return make_conninfo(
             host=self.host,
