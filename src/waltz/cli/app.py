@@ -3,7 +3,7 @@ import logging
 import structlog
 import typer
 
-from waltz.cli.commands import init, start, status
+from waltz.cli.commands import diagnose, init, start, status
 
 app = typer.Typer(
     name="waltz",
@@ -16,6 +16,7 @@ app = typer.Typer(
 app.command(name="start")(start.start)
 app.command(name="init")(init.init)
 app.command(name="status")(status.status)
+app.command(name="diagnose")(diagnose.diagnose)
 
 
 def configure_logging() -> None:
