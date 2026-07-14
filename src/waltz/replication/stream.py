@@ -50,11 +50,12 @@ class StreamManager:
         self._sink = sink
         self._pgconn: pq.abc.PGconn | None = None
         self._last_lsn = 0
-        self._stop = False
+        self._stop_event = asyncio.Event()
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGTERM, self._request_stop)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, self._request_stop, sig)
         structlog.contextvars.clear_contextvars()
         structlog.contextvars.bind_contextvars(
             slot=self._config.slot,
@@ -62,23 +63,30 @@ class StreamManager:
         )
 
         backoff = _INITIAL_BACKOFF
-        while not self._stop:
+        while not self._stop_event.is_set():
             try:
                 await self._connect_and_stream()
                 backoff = _INITIAL_BACKOFF
-            except KeyboardInterrupt:
-                break
             except PermanentReplicationError:
                 raise
             except (TransientReplicationError, TransientSinkError) as e:
                 jitter = backoff * random.uniform(0, 0.1)
                 logger.warning("stream.reconnecting", error=str(e), backoff=round(backoff + jitter))
-                await asyncio.sleep(backoff + jitter)
+                try:
+                    # a stop signal during a 30-second backoff must wake us
+                    # immediately instead of hanging until the backoff expires
+                    await asyncio.wait_for(
+                        self._stop_event.wait(),
+                        timeout=backoff + jitter
+                    )
+                except TimeoutError:
+                    pass
                 backoff = min(backoff * 2, _MAX_BACKOFF)
             self._decoder.clear()
 
-    def _request_stop(self) -> None:
-        self._stop = True
+    def _request_stop(self, sig: signal.Signals) -> None:
+        logger.info("stream.stop_requested", signal=sig.name)
+        self._stop_event.set()
 
     async def _connect_and_stream(self) -> None:
         try:
@@ -114,7 +122,7 @@ class StreamManager:
         loop = asyncio.get_running_loop()
         fd = self._pgconn.socket
 
-        while not self._stop:
+        while not self._stop_event.is_set():
             n_bytes, data = self._pgconn.get_copy_data(1)    # 1 = non-blocking
 
             if n_bytes == -1:
@@ -136,6 +144,9 @@ class StreamManager:
                     pass
                 finally:
                     loop.remove_reader(fd)
+                # notice that we will start to read frames after continue as
+                # os woke us up via add_reader and let us know there is data
+                # in the socket
                 continue
 
             frame = bytes(data)
