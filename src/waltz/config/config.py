@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Annotated, Any
 
 import yaml
 from dotenv import load_dotenv
 from psycopg.conninfo import make_conninfo
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StringConstraints, ValidationError
 
 from waltz.errors import ConfigError
+
+# PostgreSQL restricts slot names to this charset; we hold publications to the same
+# rule so both stay safe to interpolate into the replication command, which
+# has no parameter binding
+PgName = Annotated[str, StringConstraints(pattern=r"^[a-z0-9_]{1,63}$")]
 
 
 class StreamConfig(BaseModel):
@@ -19,8 +24,8 @@ class StreamConfig(BaseModel):
     user: str
     password: str
     dbname: str
-    slot: str = "waltz_slot_pgo"
-    publication: str = "waltz_pub"
+    slot: PgName = "waltz_slot_pgo"
+    publication: PgName = "waltz_pub"
     checkpoint_path: str = "waltz.lsn"
     sink_type: str = "stdout"
     sink_url: str | None = None
