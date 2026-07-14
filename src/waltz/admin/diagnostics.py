@@ -38,7 +38,7 @@ class CheckOutcome(StrEnum):
     PASS = "pass"
     WARN = "warn"   # works today, who knows it will tomorrow
     FAIL = "fail"
-    SKIP = "skip"   # prerequiste failed, so this could not be checked
+    SKIP = "skip"   # prerequisite failed or check is not applicable
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,7 +73,7 @@ def check_server_version(settings: ServerSettings) -> CheckResult:
             "server_version", CheckOutcome.FAIL, f"PostgreSQL {major}",
             "waltz relies on PG 13+ slot columns (wal_status, safe_wal_size); upgrade the server",
         )
-    return CheckResult("wal_level", CheckOutcome.PASS, f"PostgreSQL {major}")
+    return CheckResult("server_version", CheckOutcome.PASS, f"PostgreSQL {major}")
 
 
 def check_wal_level(settings: ServerSettings) -> CheckResult:
@@ -83,7 +83,7 @@ def check_wal_level(settings: ServerSettings) -> CheckResult:
             "set wal_level = logical in postgresql.conf and restart (reload is not enough)",
         )
     return CheckResult(
-        "replication_privelege", CheckOutcome.PASS, "logical")
+        "wal_level", CheckOutcome.PASS, "logical")
 
 
 def check_replication_privilege(role: RoleFlags) -> CheckResult:
@@ -105,6 +105,7 @@ def check_slot_capacity(settings: ServerSettings, used: int, slot_exists: bool) 
             "slot_capacity", CheckOutcome.FAIL, observed,
             "`waltz init` will fail: drop an unused slot or raise max_replication_slots (restart)",
         )
+    # if slot not exist and there is room for the slot that waltz will need
     return CheckResult("slot_capacity", CheckOutcome.PASS, observed)
 
 
@@ -229,22 +230,37 @@ async def _catalog_checks(config: StreamConfig) -> tuple[list[CheckResult], Slot
     slot: SlotStatus | None = None
     try:
         async with admin_connection(config) as conn:
+            # if the connection is successful which means you have conn object now,
+            # append it in results. Remember the flow follows _CATALOG_CHECKS!
             results.append(CheckResult(
                 "connection", CheckOutcome.PASS,
                 f"{config.host}:{config.port}/{config.dbname}",
             ))
+            # check version but if it's not the version waltz expects, then skip
+            # other checks as they become unnecessary to check.
             settings = await get_server_settings(conn)
             version = check_server_version(settings)
             results.append(version)
             if version.outcome is CheckOutcome.FAIL:
                 results.extend(_skip(n, "unsupported server version") for n in _CATALOG_CHECKS[2:])
                 return results, None
+
+            # check wal_level. should be logical for waltz
             results.append(check_wal_level(settings))
+
+            # the current role must allow to connect in replication mode
             results.append(check_replication_privilege(await get_current_role_flags(conn)))
+
+            # the checks above required settings but now we need info about slot as
+            # the checks below is about the health of slot itself
             slot = await get_slot_status(conn, config.slot)
             used = await count_used_slots(conn)
+
             results.append(check_slot_capacity(settings, used, slot is not None))
             results.append(check_slot(slot, config.slot))
+
+            # check_slot_holder, check_slot_wal_status, check_lag strictly dependant
+            # on the existence of slot object.
             if slot is None:
                 results.extend(
                     _skip(n, "slot does not exist")
@@ -254,16 +270,22 @@ async def _catalog_checks(config: StreamConfig) -> tuple[list[CheckResult], Slot
                 results.append(check_slot_holder(slot))
                 results.append(check_slot_wal_status(slot))
                 results.append(check_lag(slot, settings))
+
+            # finally check publication
             pub = await get_publication_info(conn, config.publication)
             results.append(check_publication(pub, config.publication))
+
     except ReplicationError as e:
         done = {r.name for r in results}
         pending = [n for n in _CATALOG_CHECKS if n not in done]
+        # hint will be transformed according to the connection success
         hint = (
             "check host/port, credentials and that PG is running"
             if pending[0] == "connection"
             else "the session died mid-diagnosis; re-run `waltz diagnose`"
         )
+        # program run accross the problem while handling the pending[0] so mark
+        # it as a FAIL and the rest has to be skipped
         results.append(CheckResult(pending[0], CheckOutcome.FAIL, str(e).strip(), hint))
         results.extend(_skip(n, "a prerequisite check failed") for n in pending[1:])
     return results, slot

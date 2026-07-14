@@ -208,13 +208,19 @@ class PublicationInfo:
 
 async def get_publication_info(conn: AdminConn, publication: str) -> PublicationInfo | None:
     try:
+        # step 1: check the publication's existence and its configuration type.
+        # the 'puballtables' column provides a boolean value indicating whether
+        # this publication was created using the 'FOR ALL TABLES' rule.
         cursor = await conn.execute(
             "SELECT puballtables FROM pg_publication WHERE pubname = %s", (publication,)
         )
         row = await cursor.fetchone()
         if row is None:
             return None
-        # pg_publication_tables expands FOR ALL TABLES too, so one count serves both kinds
+        # step 2: find the total number of tables currently covered by this publication.
+        # The pg_publication_tables view automatically lists all included tables, even if
+        # the publication was set to 'FOR ALL TABLES'. This allows us to get the exact
+        # table count in all scenarios simply by using count(*)
         cursor = await conn.execute(
             "SELECT count(*) FROM pg_publication_tables WHERE pubname = %s", (publication,)
         )
