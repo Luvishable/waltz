@@ -24,6 +24,7 @@ class StreamConfig(BaseModel):
     user: str
     password: str
     dbname: str
+    connect_timeout: int = 10
     slot: PgName = "waltz_slot_pgo"
     publication: PgName = "waltz_pub"
     checkpoint_path: str = "waltz.lsn"
@@ -40,6 +41,7 @@ class StreamConfig(BaseModel):
                 "user": os.getenv("DB_USER"),
                 "password": os.getenv("POSTGRES_PASSWORD"),
                 "dbname": os.getenv("DB_NAME"),
+                "connect_timeout": os.getenv("DB_CONNECT_TIMEOUT", "10"),
                 "slot": os.getenv("WALTZ_SLOT", "waltz_slot_pgo"),
                 "publication": os.getenv("WALTZ_PUBLICATION", "waltz_pub"),
                 "checkpoint_path": os.getenv("WALTZ_CHECKPOINT", "waltz.lsn"),
@@ -63,6 +65,7 @@ class StreamConfig(BaseModel):
                 "user": src.get("user"),
                 "password": src.get("password"),
                 "dbname": src.get("database"),
+                "connect_timeout": src.get("connect_timeout", 10),
                 "slot": src.get("slot", "waltz_slot_pgo"),
                 "publication": src.get("publication", "waltz_pub"),
                 "checkpoint_path": ckpt.get("path", "waltz.lsn"),
@@ -84,6 +87,7 @@ class StreamConfig(BaseModel):
             user=self.user,
             password=self.password,
             dbname=self.dbname,
+            connect_timeout=self.connect_timeout,
             replication="database",
         )
 
@@ -94,4 +98,5 @@ class StreamConfig(BaseModel):
             user=self.user,
             password=self.password,
             dbname=self.dbname,
+            connect_timeout=self.connect_timeout,
         )
