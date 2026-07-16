@@ -1,0 +1,14 @@
+.git
+.gitignore
+.venv
+__pycache__/
+*.pyc
+.env
+waltz.lsn
+tests/
+docs/
+compose.yaml
+CHANGELOG.md
+CLAUDE.md
+Dockerfile
+.dockerignore
